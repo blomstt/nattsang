@@ -1,1 +1,1 @@
-return Nattsang.Gui.App.Run();
+return Nattsang.Gui.App.Run(args);

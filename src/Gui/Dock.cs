@@ -166,6 +166,14 @@ sealed unsafe partial class App
     double motionTime, motionLast;
     uint motionTick;
 
+    // With levels from the helper, each pill springs to its band's level
+    // as it's heard; LevelLead looks a little ahead, for the time the
+    // spring takes to get there.
+    const double LevelLead = 0.03;
+    readonly Pills.Spring[] springs = new Pills.Spring[Pills.Count];
+    readonly double[] targets = new double[Pills.Count];
+    bool Measured => levelFeed?.Measures == true;
+
     void Motion()
     {
         var run = player.Playing && vizOn && animations;
@@ -178,20 +186,36 @@ sealed unsafe partial class App
         motionLast = -1;
         motionTick = Ticking(window, now =>
         {
-            if (motionLast >= 0) motionTime += Math.Min(now - motionLast, 0.1);
+            var dt = motionLast >= 0 ? Math.Min(now - motionLast, 0.1) : 0;
+            motionTime += dt;
             motionLast = now;
+            if (Measured)
+            {
+                levelFeed!.Levels.At(now + LevelLead, targets);
+                for (int i = 0; i < springs.Length; i++) springs[i].Step(targets[i], dt);
+            }
             N.gtk_widget_queue_draw(pills);
             foreach (var a in eqAreas) if (N.gtk_widget_get_visible(a)) N.gtk_widget_queue_draw(a);
             return true;
         });
     }
 
+    // Levels are asked of the helper only while the pills can be seen: the
+    // visualizer on, not hidden for room, and motion allowed. Paused, the
+    // helper measures nothing anyway: it only measures what it plays.
+    void WantLevels() => levelFeed?.Want(vizOn && animations && (hidden & Room.Part.Visualizer) == 0);
+
+    // The helper turned out to measure, or has gone: the pills switch
+    // between the music and their own motion.
+    void LevelsChanged() => N.gtk_widget_queue_draw(pills);
+
     // Off, the visualizer is hidden by its opacity (ToggleViz) and holds still.
     void DrawPills(nint cr, int width, int height)
     {
+        var measured = Measured;
         for (int i = 0; i < Pills.Count; i++)
         {
-            var s = Pills.Scale(i, motionTime);
+            var s = measured ? Pills.LevelScale(springs[i].X) : Pills.Scale(i, motionTime);
             N.cairo_save(cr);
             N.cairo_translate(cr, (i + .5) / Pills.Count * width, height / 2.0);
             N.cairo_scale(cr, 1, s);

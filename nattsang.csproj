@@ -23,8 +23,14 @@
 
   <!-- The tests are their own project (tests/CoreTests). -->
   <ItemGroup>
-    <Compile Remove="tests/**" />
-    <None Remove="tests/**" />
+    <Compile Remove="tests/**;helper/**" />
+    <None Remove="tests/**;helper/**" />
+  </ItemGroup>
+
+  <!-- The player helper, once built (see the README), goes
+       beside the binary; without it the window plays the sample album. -->
+  <ItemGroup Condition="Exists('helper/target/release/nattsang-helper')">
+    <None Include="helper/target/release/nattsang-helper" Link="nattsang-helper" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

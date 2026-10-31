@@ -74,20 +74,26 @@ static class Style
         .filters { padding: 0 8px; }
         .rule { min-height: 1px; background: {{C("border")}}; }
 
-        /* lists */
-        list.tracks, list.queue-list { background: none; }
+        /* lists: the library's is a list view, its rows' insides (.trow) carry the playing one's colours */
+        listview.tracks, list.queue-list { background: none; }
         scrolledwindow, viewport { background: none; }
-        list.tracks > row {
-          padding: 3px 8px; margin-bottom: 10px; background: none; color: {{C("text")}};
+        listview.tracks > row {
+          padding: 0; margin-bottom: 10px; background: none; color: {{C("text")}};
           outline: 0 solid transparent; min-height: 0; border-radius: 0;
           transition: background-color 200ms, color 200ms;
         }
-        list.tracks > row:last-child { margin-bottom: 0; }
-        list.tracks > row:hover, list.tracks > row:selected { background: {{C("hover")}}; color: {{C("text")}}; }
-        list.tracks > row:focus-visible { outline: 1px solid {{C("accent")}}; outline-offset: -1px; }
-        list.tracks > row.current, list.tracks > row.current:hover, list.tracks > row.current:selected { background: {{C("raised")}}; color: {{C("playing")}}; }
-        list.tracks > row.current:focus-visible { outline: 1px solid {{C("accent")}}; outline-offset: -1px; }
-        list.tracks > row label, list.queue-list > row label { color: inherit; }
+        listview.tracks > row:hover, listview.tracks > row:selected { background: {{C("hover")}}; color: {{C("text")}}; }
+        listview.tracks > row:focus-visible { outline: 1px solid {{C("accent")}}; outline-offset: -1px; }
+        .trow { padding: 3px 8px; transition: background-color 200ms, color 200ms; }
+        .trow.current { background: {{C("raised")}}; color: {{C("playing")}}; }
+        listview.tracks > row label, list.queue-list > row label { color: inherit; }
+        .note { color: {{C("dim")}}; padding: 3px 8px; }
+
+        /* the way there, in the library's top border */
+        .crumbs { margin-right: 24px; }
+        .crumbs > label { min-height: 21px; }
+        button.btn.crumb { color: {{C("bright")}}; }
+        button.btn.crumb:hover { background: {{C("raised")}}; color: {{C("accent")}}; }
 
         /* now playing */
         .song { font-size: 36px; font-weight: 700; color: {{C("playing")}}; line-height: 1.1; min-height: 0; }

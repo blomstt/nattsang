@@ -1,0 +1,44 @@
+[package]
+name = "nattsang-helper"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Plays music for the Nattsang window"
+license = "MIT"
+publish = false
+
+# Each crate is here for one reason; all but the librespot ones are already
+# in librespot's tree, so they add nothing to the binary.
+[dependencies]
+# The session: signing in, the access token, the cached credentials.
+# native-tls uses the system's OpenSSL instead of compiling rustls in.
+librespot-core = { version = "0.8", default-features = false, features = ["native-tls"] }
+# The player, with no output of its own (no rodio/cpal, no ALSA): ours is sink.rs.
+librespot-playback = { version = "0.8", default-features = false, features = ["native-tls"] }
+# The output: PulseAudio's simple API, as librespot's PulseAudio sink uses it
+# (the same crates), so the visualizer can see the samples and the latency.
+libpulse-binding = { version = "2", default-features = false }
+libpulse-simple-binding = { version = "2", default-features = false }
+# Album and track metadata, fetched by URI through the session.
+librespot-metadata = { version = "0.8", default-features = false }
+# The messages of the service's own endpoints (metadata in batches, search).
+librespot-protocol = "0.8"
+# Reading and writing those messages.
+protobuf = "3.7"
+# Signing in through the browser (authorization code with PKCE).
+librespot-oauth = { version = "0.8", default-features = false }
+# librespot is async: a single-threaded runtime, its channels and timers.
+tokio = { version = "1", default-features = false, features = ["rt", "sync", "time"] }
+# The headers of the collection requests.
+http = "1"
+# dup2, to keep stdout for the protocol alone; the monotonic clock.
+libc = "0.2"
+# librespot's warnings, passed on to stderr.
+log = "0.4"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

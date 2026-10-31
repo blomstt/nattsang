@@ -5,8 +5,9 @@ namespace Nattsang.Gui;
 // Signals, timers, frame ticks and small widget helpers. A handler is a C#
 // delegate kept under a slot number; GTK gets a static unmanaged trampoline
 // and the slot as its data. The window is built once and lives as long as
-// the process, so signal slots are never freed; a timer's or a tick
-// callback's slot is freed when it ends, and reused.
+// the process, so signal slots are never freed; a timer's, a tick or fd
+// callback's, an async call's or a drawing area's slot is freed when it
+// ends, and reused.
 static unsafe class Ui
 {
     static readonly List<Delegate?> handlers = [];
@@ -33,6 +34,10 @@ static unsafe class Ui
     public static void OnArg(nint obj, string signal, Action<nint> handler) =>
         N.g_signal_connect_data(obj, signal, (nint)(delegate* unmanaged<nint, nint, nint, void>)&WithArg, Keep(handler), 0, 0);
 
+    // activate on a list view (the row's position)
+    public static void OnPosition(nint obj, string signal, Action<uint> handler) =>
+        N.g_signal_connect_data(obj, signal, (nint)(delegate* unmanaged<nint, uint, nint, void>)&WithPosition, Keep(handler), 0, 0);
+
     // clicked, with one delegate shared by many buttons (rows rebuilt
     // often): it gets the button, and is kept once.
     public static void OnClicked(nint button, Action<nint> handler)
@@ -53,9 +58,9 @@ static unsafe class Ui
         N.gtk_widget_add_controller(widget, controller);
     }
 
-    // draw(cr, width, height)
+    // draw(cr, width, height); its slot is freed with the area.
     public static void OnDraw(nint area, Action<nint, int, int> draw) =>
-        N.gtk_drawing_area_set_draw_func(area, (nint)(delegate* unmanaged<nint, nint, int, int, nint, void>)&Draw, Keep(draw), 0);
+        N.gtk_drawing_area_set_draw_func(area, (nint)(delegate* unmanaged<nint, nint, int, int, nint, void>)&Draw, Keep(draw), (nint)(delegate* unmanaged<nint, void>)&Forget);
 
     // A one-shot timer, ms from now: its source id, for Cancel.
     public static uint After(uint ms, Action action) =>
@@ -66,6 +71,22 @@ static unsafe class Ui
         if (source != 0) N.g_source_remove(source);
         source = 0;
     }
+
+    // ready() runs on the main loop whenever fd has something to read, or
+    // has closed, until it returns false; the source id, for Cancel.
+    public static uint OnReadable(int fd, Func<bool> ready) =>
+        N.g_unix_fd_add_full(0, fd, 1 | 8 | 16, (nint)(delegate* unmanaged<int, uint, nint, int>)&Readable, Keep(ready), (nint)(delegate* unmanaged<nint, void>)&Forget); // G_IO_IN | ERR | HUP
+
+    // exited(wait status) runs once, when the child process pid has exited;
+    // the source id, for Cancel.
+    public static uint OnExit(int pid, Action<int> exited) =>
+        N.g_child_watch_add_full(0, pid, (nint)(delegate* unmanaged<int, int, nint, void>)&ChildExited, Keep(exited), (nint)(delegate* unmanaged<nint, void>)&Forget);
+
+    // An async call's GAsyncReadyCallback: pass AsyncReady as the callback
+    // and Once(done) as its data; done(source, result) runs once, on the
+    // main loop, and its slot is freed.
+    public static nint AsyncReady => (nint)(delegate* unmanaged<nint, nint, nint, void>)&Ready;
+    public static nint Once(Action<nint, nint> done) => Keep(done);
 
     // Runs action on the GLib main thread, soon; safe to call from any
     // thread. For a player that hears from another thread (a socket
@@ -131,6 +152,13 @@ static unsafe class Ui
     }
 
     [UnmanagedCallersOnly]
+    static void WithPosition(nint self, uint position, nint data)
+    {
+        try { Handler<Action<uint>>(data)(position); }
+        catch (Exception e) { Report(e); }
+    }
+
+    [UnmanagedCallersOnly]
     static void Draw(nint area, nint cr, int w, int h, nint data)
     {
         try { Handler<Action<nint, int, int>>(data)(cr, w, h); }
@@ -159,6 +187,29 @@ static unsafe class Ui
         catch (Exception e) { Report(e); return 0; }
     }
 
+    [UnmanagedCallersOnly]
+    static int Readable(int fd, uint condition, nint data)
+    {
+        try { return Handler<Func<bool>>(data)() ? 1 : 0; }
+        catch (Exception e) { Report(e); return 0; }
+    }
+
+    [UnmanagedCallersOnly]
+    static void ChildExited(int pid, int status, nint data)
+    {
+        try { Handler<Action<int>>(data)(status); }
+        catch (Exception e) { Report(e); }
+    }
+
+    [UnmanagedCallersOnly]
+    static void Ready(nint source, nint result, nint data)
+    {
+        var done = Handler<Action<nint, nint>>(data);
+        Free(data);
+        try { done(source, result); }
+        catch (Exception e) { Report(e); }
+    }
+
     // Everything posted so far, in order; then the idle source ends.
     [UnmanagedCallersOnly]
     static int RunPosted(nint data)
@@ -181,10 +232,12 @@ static unsafe class Ui
 
     // A timer or tick callback that's done drops its delegate.
     [UnmanagedCallersOnly]
-    static void Forget(nint data)
+    static void Forget(nint data) => Free(data);
+
+    static void Free(nint slot)
     {
-        handlers[(int)data] = null;
-        free.Push((int)data);
+        handlers[(int)slot] = null;
+        free.Push((int)slot);
     }
 
     // An exception must never unwind into GTK: the callbacks catch and report it.

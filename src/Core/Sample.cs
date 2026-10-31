@@ -5,6 +5,7 @@ namespace Nattsang.Core;
 public static class Sample
 {
     public const string Artist = "Linkin Park", Album = "Meteora (Bonus Edition)";
+    public const string AlbumUri = "sample:album:meteora", ArtistUri = "sample:artist:linkin-park", PlaylistUri = "sample:playlist:night";
     public const int Playing = 12, Position = 72, QueueLength = 7;
 
     static readonly (string Title, string Time)[] list =
@@ -16,7 +17,8 @@ public static class Sample
         ("Numb", "3:07"),
     ];
 
-    public static readonly Track[] Tracks = [.. list.Select((t, i) => new Track(i + 1, t.Title, Artist, Album, Time.Parse(t.Time)))];
+    public static readonly Track[] Tracks = [.. list.Select((t, i) =>
+        new Track($"sample:{i + 1}", i + 1, t.Title, Artist, Album, Time.Parse(t.Time), AlbumUri, ArtistUri))];
 
     public static IEnumerable<Track> Queue => Tracks.Take(QueueLength);
 }

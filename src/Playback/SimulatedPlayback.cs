@@ -7,27 +7,28 @@ namespace Nattsang.Playback;
 public sealed class SimulatedPlayback : IPlayback
 {
     readonly Func<double> clock;
-    readonly Track[] tracks;
     double anchorPosition, anchorTime;
 
     public event Action? Changed;
 
-    // clock: monotonic seconds
-    public SimulatedPlayback(Track[] tracks, int index, double position, bool playing, Func<double> clock)
+    // Starts on list's index'th track. clock: monotonic seconds
+    public SimulatedPlayback(Order order, Listing list, int index, double position, bool playing, Func<double> clock)
     {
-        if (tracks.Length == 0) throw new ArgumentException("no tracks", nameof(tracks));
-        this.tracks = tracks;
+        if (list.Tracks.Count == 0) throw new ArgumentException("no tracks", nameof(list));
+        Order = order;
         this.clock = clock;
-        Index = Math.Clamp(index, 0, tracks.Length - 1);
+        order.Play(list, index);
         anchorPosition = position;
         anchorTime = clock();
         Playing = playing;
     }
 
-    public IReadOnlyList<Track> Tracks => tracks;
-    public int Index { get; private set; }
-    public Track Track => tracks[Index];
+    public Order Order { get; }
+    public Track Track => Order.Current;
     public bool Playing { get; private set; }
+    public bool Stopped { get; private set; }
+    public string Cover => "";
+    public Status? Status => null;
 
     // The design's clock counts 0, 1, … up to the track's length and then
     // back to 0, so the full length shows for one second.
@@ -46,21 +47,42 @@ public sealed class SimulatedPlayback : IPlayback
         anchorPosition = Position;
         anchorTime = clock();
         Playing = !Playing;
+        Stopped = false;
         Changed?.Invoke();
     }
 
-    // Next and previous keep playing or paused as they were, and wrap around the album.
-    public void Next() => Load((Index + 1) % tracks.Length, Playing);
-    public void Previous() => Load((Index + tracks.Length - 1) % tracks.Length, Playing);
-
-    public void Play(int index) => Load(index, true);
-
-    void Load(int index, bool playing)
+    public void Stop()
     {
-        Index = Math.Clamp(index, 0, tracks.Length - 1);
+        anchorPosition = 0;
+        anchorTime = clock();
+        Playing = false;
+        Stopped = true;
+        Changed?.Invoke();
+    }
+
+    public void Seek(double seconds)
+    {
+        anchorPosition = Math.Clamp(seconds, 0, Track.Seconds);
+        anchorTime = clock();
+        Changed?.Invoke();
+    }
+
+    // Next and previous keep playing or paused as they were, and wrap around the list.
+    public void Next() => Start(Order.Advance(true), Playing);
+    public void Previous() => Start(Order.Back(true), Playing);
+
+    public void Play(Listing list, int index)
+    {
+        if (index >= 0 && index < list.Tracks.Count) Start(Order.Play(list, index), true);
+    }
+
+    void Start(Track? track, bool playing)
+    {
+        if (track == null) return;
         anchorPosition = 0;
         anchorTime = clock();
         Playing = playing;
+        Stopped = false;
         Changed?.Invoke();
     }
 }

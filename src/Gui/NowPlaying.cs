@@ -9,7 +9,7 @@ namespace Nattsang.Gui;
 sealed unsafe partial class App
 {
     nint song, sub, lyricsTab, queueTab, swap, lyricsArea, queueView;
-    nint queueNowTitle, queueNowTime, queueList, queueSummary;
+    nint queueNowTitle, queueNowTime, queueList, queueSummary, queueHead;
     bool showingQueue;
 
     nint BuildNowPlaying()
@@ -44,7 +44,7 @@ sealed unsafe partial class App
         N.gtk_widget_set_parent(queueView, swap);
 
         var panel = Add(Box(Vertical, 16, "panel", "now"), head, swap);
-        return Titled(panel, "now playing");
+        return Titled(panel, "now playing", out _);
     }
 
     // ---- lyrics | queue --------------------------------------------------------
@@ -138,23 +138,77 @@ sealed unsafe partial class App
 
     // ---- lyrics ----------------------------------------------------------------
 
+    // What the lyrics view shows: lines with a current one (synced lyrics,
+    // or the sample's placeholders), plain lyrics going by evenly with none
+    // marked, or a note in place of the current line (looking, none found,
+    // instrumental, an error).
+    enum LyricView { Lines, Paced, Note }
+
     string[] lyricLines = [];
+    double[]? lyricTimes; // synced: when each line starts; null: the placeholders' four seconds
+    LyricView lyricView;
+    string lyricsUri = ""; // the track they're for
     int lyricLine, lyricFrom;
     double lyricStart, lyricFromOffset; // lyricStart 0: not moving
     uint lyricTick;
     nint lyricFont, lyricBold, lyricAttrs;
 
+    // A new track: the sample's get placeholders; the account's are looked
+    // up (lyricsSource), once per track, the note showing until they come.
     void LyricsForTrack(Track t, double pos, bool first)
     {
-        lyricLines = Lyrics.Placeholder(t.Seconds);
-        var line = Lyrics.LineAt(pos, lyricLines.Length);
+        if (t.Uri == lyricsUri && !first) return; // the same track, its details filled in
+        lyricsUri = t.Uri;
+        if (t.Uri.Length == 0) ShowLyrics(LyricView.Note, [], null, pos, first);
+        else if (lyricsSource == null) ShowLyrics(LyricView.Lines, Lyrics.Placeholder(t.Seconds), null, pos, first);
+        else
+        {
+            ShowLyrics(LyricView.Note, ["looking for lyrics…"], null, pos, first);
+            lyricsSource.Find(t, lyricsFound);
+        }
+    }
+
+    // Only for the track that's on: an answer for one it has left is dropped.
+    Action<Track, Lyrics.Song?, string?> lyricsFound => lyricsAction ??= (t, song, error) =>
+    {
+        if (t.Uri != lyricsUri || t.Uri != player.Track.Uri) return;
+        var pos = player.Position;
+        if (song == null) ShowLyrics(LyricView.Note, [$"couldn't load the lyrics: {error}"], null, pos, false);
+        else if (song.Kind == Lyrics.Kind.Synced) ShowLyrics(LyricView.Lines, song.Lines, song.Times, pos, false);
+        else if (song.Kind == Lyrics.Kind.Plain) ShowLyrics(LyricView.Paced, song.Lines, null, pos, false);
+        else if (song.Kind == Lyrics.Kind.Instrumental) ShowLyrics(LyricView.Note, [$"{Lyrics.Break} instrumental"], null, pos, false);
+        else ShowLyrics(LyricView.Note, ["no lyrics found for this song"], null, pos, false);
+        Schedule(); // the clock wakes for the next line
+    };
+    Action<Track, Lyrics.Song?, string?>? lyricsAction;
+
+    void ShowLyrics(LyricView view, string[] lines, double[]? times, double pos, bool first)
+    {
+        (lyricView, lyricLines, lyricTimes) = (view, lines, times);
+        var line = LyricLineAt(pos);
         if (first) { lyricLine = lyricFrom = line; lyricFromOffset = Lyrics.Offset(line); return; }
         MoveLyrics(line);
     }
 
+    int LyricLineAt(double pos) => lyricView switch
+    {
+        LyricView.Lines => lyricTimes is { } times ? Lyrics.LineAt(pos, times) : Lyrics.LineAt(pos, lyricLines.Length),
+        LyricView.Paced => Lyrics.PacedAt(pos, player.Track.Seconds, lyricLines.Length),
+        _ => 0,
+    };
+
+    // Seconds from pos to the next synced line, for the clock; infinity when none comes.
+    double ToNextLyric(double pos)
+    {
+        if (lyricView != LyricView.Lines || lyricTimes is not { } times) return double.PositiveInfinity;
+        var next = Lyrics.LineAt(pos, times) + 1;
+        if (pos < times.FirstOrDefault()) next = 0;
+        return next < times.Length ? times[next] - pos : double.PositiveInfinity;
+    }
+
     void LyricLine(double pos)
     {
-        var line = Lyrics.LineAt(pos, lyricLines.Length);
+        var line = LyricLineAt(pos);
         if (line != lyricLine) MoveLyrics(line);
     }
 
@@ -213,24 +267,31 @@ sealed unsafe partial class App
         var offset = LyricOffset(move);
         const int h = Lyrics.LineHeight;
 
+        // Only lines with a current one mark it; plain lyrics and notes are
+        // drawn evenly, plain in the text colour, a note dim.
+        var marked = lyricView == LyricView.Lines;
         var layout = N.pango_cairo_create_layout(cr);
         N.pango_layout_set_attributes(layout, lyricAttrs);
+        N.pango_layout_set_ellipsize(layout, 3); // PANGO_ELLIPSIZE_END
         for (int i = 0; i < lyricLines.Length; i++)
         {
             var y = offset + i * h;
-            if (y < -h * 1.2 || y > height + h * 0.2) continue;
-            var current = i == lyricLine;
+            if (y < -h * 1.2 || y > height + h * 0.2 || lyricLines[i].Length == 0) continue;
+            var current = marked && i == lyricLine;
             N.pango_layout_set_font_description(layout, current ? lyricBold : lyricFont);
             N.pango_layout_set_text(layout, current ? "▸ " + lyricLines[i] : lyricLines[i], -1);
+            var scaleFrom = marked && i == lyricFrom ? 1.12 : 1;
+            var scale = scaleFrom + ((current ? 1.12 : 1) - scaleFrom) * move;
+            // A line too long for the panel ends in "…", at the size it's drawn.
+            N.pango_layout_set_width(layout, (int)(width / scale * 1024));
             int lw, lh;
             N.pango_layout_get_size(layout, &lw, &lh);
-            var scaleFrom = i == lyricFrom ? 1.12 : 1;
-            var scale = scaleFrom + ((current ? 1.12 : 1) - scaleFrom) * move;
             N.cairo_save(cr);
             N.cairo_translate(cr, 0, y + h / 2.0);
             N.cairo_scale(cr, scale, scale);
             N.cairo_move_to(cr, 0, -lh / 1024.0 / 2);
-            Rgb(cr, Mix(ToneColor(i - lyricFrom), ToneColor(i - lyricLine), fade));
+            Rgb(cr, !marked ? (lyricView == LyricView.Note ? palette.Dim : palette.Text)
+                : Mix(ToneColor(i - lyricFrom), ToneColor(i - lyricLine), fade));
             N.pango_cairo_show_layout(cr, layout);
             N.cairo_restore(cr);
         }
@@ -247,6 +308,20 @@ sealed unsafe partial class App
 
     // ---- queue -----------------------------------------------------------------
 
+    // The view: the playing track, then what plays next: the queue (each
+    // can be taken off it), then the list it plays from, as far as
+    // NextShown goes. Rows are kept and changed in place, never all made
+    // again, so a long queue costs only what changed.
+    const int NextShown = 50;
+    nint nextList, queueHeadQueue;
+    readonly List<QueueRow> queueRows = [], nextRows = [];
+
+    sealed class QueueRow
+    {
+        public nint Row, Title, Time;
+        public string Text = "", Seconds = "";
+    }
+
     nint BuildQueue()
     {
         var eq = Area(24, 21);
@@ -262,49 +337,100 @@ sealed unsafe partial class App
         N.gtk_widget_set_size_request(gap, 24, -1);
         var now = Add(Box(Horizontal, 10, "qnow"), eq, queueNowTitle, queueNowTime, gap);
 
+        queueHeadQueue = Label("next in queue", "qhead");
         queueList = Css(N.gtk_list_box_new(), "queue-list");
         N.gtk_list_box_set_selection_mode(queueList, 0); // GTK_SELECTION_NONE
+        queueHead = Label("next", "qhead");
+        nextList = Css(N.gtk_list_box_new(), "queue-list");
+        N.gtk_list_box_set_selection_mode(nextList, 0);
         var scroll = N.gtk_scrolled_window_new();
         N.gtk_scrolled_window_set_policy(scroll, 2, 1);
-        N.gtk_scrolled_window_set_child(scroll, queueList);
+        N.gtk_scrolled_window_set_child(scroll, Add(Box(Vertical, 0), queueHeadQueue, queueList, queueHead, nextList));
         N.gtk_widget_set_vexpand(scroll, true);
 
         queueSummary = Label("");
         var foot = Add(Box(Horizontal, 18, "qfoot"), queueSummary, Spacer(),
-            Button("shuffle queue", null, () => queue.Shuffle(Random.Shared)),
-            Button("clear", null, queue.Clear));
+            Button("shuffle queue", null, () => player.Order.Queue.Shuffle(Random.Shared)),
+            Button("clear", null, player.Order.Queue.Clear));
 
-        return Add(Box(Vertical, 2), now, Label($"next from {Sample.Album}", "qhead"), scroll, foot);
+        return Add(Box(Vertical, 2), now, scroll, foot);
     }
 
     void QueueChanged()
     {
+        var queue = player.Order.Queue;
         N.gtk_button_set_label(queueTab, $"queue · {queue.Count}");
         N.gtk_label_set_text(queueSummary, queue.Summary);
-        N.gtk_list_box_remove_all(queueList);
-        foreach (var t in queue.Items)
+        N.gtk_widget_set_visible(queueHeadQueue, queue.Count > 0);
+        SyncRows(queueList, queueRows, queue.Items, true);
+    }
+
+    // The list it plays from moved on, or grew: the rows after the queue.
+    void NextChanged()
+    {
+        var order = player.Order;
+        var next = order.Next(NextShown).ToList();
+        N.gtk_label_set_text(queueHead, order.List.Title.Length > 0 ? $"next from {order.List.Title}" : "next");
+        N.gtk_widget_set_visible(queueHead, next.Count > 0);
+        SyncRows(nextList, nextRows, next, false);
+    }
+
+    // The list's rows show tracks: the rows there are get the new text where
+    // it differs, missing ones are added and extra ones taken off the end.
+    void SyncRows(nint list, List<QueueRow> rows, IReadOnlyList<Track> tracks, bool removable)
+    {
+        for (int i = 0; i < tracks.Count; i++)
         {
-            var handle = Label("⋮⋮", "handle");
-            N.gtk_widget_set_size_request(handle, 24, -1);
-            var title = Markup($"{Escape(t.Title)} <span foreground=\"{palette.Hex("dim")}\">· {Escape(t.Artist)}</span>");
-            N.gtk_widget_set_hexpand(title, true);
-            N.gtk_label_set_ellipsize(title, 3);
-            var time = Label(Time.Format(t.Seconds));
-            N.gtk_label_set_xalign(time, 1);
-            N.gtk_widget_set_size_request(time, 48, -1);
-            var remove = N.gtk_button_new_with_label("×");
-            Css(remove, "btn", "x", "playing");
-            Name(remove, "Remove from queue");
-            OnClicked(remove, removeFromQueue);
-            N.gtk_widget_set_valign(remove, Center);
-            N.gtk_list_box_append(queueList, Add(Box(Horizontal, 10), handle, title, time, remove));
+            var t = tracks[i];
+            var text = $"{Escape(t.Title)} <span foreground=\"{palette.Hex("dim")}\">· {Escape(t.Artist)}</span>";
+            var seconds = Time.Format(t.Seconds);
+            if (i == rows.Count) rows.Add(QueueRowFor(list, removable));
+            var r = rows[i];
+            if (r.Text != text) N.gtk_label_set_markup(r.Title, r.Text = text);
+            if (r.Seconds != seconds) N.gtk_label_set_text(r.Time, r.Seconds = seconds);
         }
+        while (rows.Count > tracks.Count)
+        {
+            N.gtk_list_box_remove(list, rows[^1].Row);
+            rows.RemoveAt(rows.Count - 1);
+        }
+    }
+
+    QueueRow QueueRowFor(nint list, bool removable)
+    {
+        var r = new QueueRow();
+        var handle = Label(removable ? "⋮⋮" : "", "handle");
+        N.gtk_widget_set_size_request(handle, 24, -1);
+        r.Title = Label("");
+        N.gtk_widget_set_hexpand(r.Title, true);
+        N.gtk_label_set_ellipsize(r.Title, 3);
+        r.Time = Label("");
+        N.gtk_label_set_xalign(r.Time, 1);
+        N.gtk_widget_set_size_request(r.Time, 48, -1);
+        nint end;
+        if (removable)
+        {
+            end = N.gtk_button_new_with_label("×");
+            Css(end, "btn", "x", "playing");
+            Name(end, "Remove from queue");
+            OnClicked(end, removeFromQueue);
+            N.gtk_widget_set_valign(end, Center);
+        }
+        else
+        {
+            end = Box(Horizontal, 0);
+            N.gtk_widget_set_size_request(end, 24, -1);
+        }
+        var box = Add(Box(Horizontal, 10), handle, r.Title, r.Time, end);
+        N.gtk_list_box_append(list, box);
+        r.Row = N.gtk_widget_get_parent(box); // the row the list box put it in
+        return r;
     }
 
     Action<nint> removeFromQueue => removeAction ??= button =>
     {
         var row = N.gtk_widget_get_ancestor(button, N.gtk_list_box_row_get_type());
-        if (row != 0) queue.RemoveAt(N.gtk_list_box_row_get_index(row));
+        if (row != 0) player.Order.Queue.RemoveAt(N.gtk_list_box_row_get_index(row));
     };
     Action<nint>? removeAction;
 }

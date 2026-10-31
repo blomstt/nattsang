@@ -116,6 +116,7 @@ sealed unsafe partial class App
         bool Shows(Room.Part p) => (parts & p) == 0;
         foreach (var h in hints) Show(h, Shows(Room.Part.Hints));
         Show(pills, Shows(Room.Part.Visualizer));
+        WantLevels();
         var focus = N.gtk_root_get_focus(window);
         if (Show(nowPanel, Shows(Room.Part.Panel)) && focus != 0 && N.gtk_widget_is_ancestor(focus, nowPanel))
             FocusList(); // the focus mustn't stay on something hidden
