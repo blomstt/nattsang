@@ -60,6 +60,9 @@ public sealed class SimulatedPlayback : IPlayback
         Changed?.Invoke();
     }
 
+    // Nothing plays, so there's nothing to make louder or quieter.
+    public void SetVolume(double gain) { }
+
     public void Seek(double seconds)
     {
         anchorPosition = Math.Clamp(seconds, 0, Track.Seconds);

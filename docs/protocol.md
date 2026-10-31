@@ -38,6 +38,7 @@ window sees its stdout close and its exit status.
 | `get` | key | sends the first page of that list (below, "Lists") |
 | `more` | key | sends its next page |
 | `levels` | `1` or `0` | starts or stops measuring the music for the visualizer (below, "Levels"); off until asked |
+| `volume` | gain, a decimal from `0` to `1` (`0.343`) | what the samples are multiplied by from now on: Nattsang's own volume (the window maps its percentage to this, cubed); `1` until told. The system's volume, and the stream's in the system's mixer, are left alone; the levels are measured before it |
 
 Commands sent before the helper has signed in wait, and run once it has.
 
@@ -57,7 +58,7 @@ Commands sent before the helper has signed in wait, and run once it has.
 | `item-playlist` | uri, name, owner (empty for your own), number of tracks | a playlist of the list |
 | `list-end` | key, more (`1`/`0`) | that was the page; `1`: `more` sends another |
 | `list-error` | key, message | the page didn't come; a message a person can read |
-| `track` | uri, title, artist, album, duration ms, cover image URL (empty when there's none) | the loaded track's metadata; the cover is for the desktop's media widgets (MPRIS), the window shows none |
+| `track` | uri, title, artist, album, duration ms, cover image URL (empty when there's none) | the loaded track's metadata; the cover (the largest up to 640 px) is shown in the now playing panel and given to the desktop's media widgets (MPRIS) |
 | `loading` | uri, position ms | loading the track |
 | `playing` | uri, position ms | playing, from that position, now |
 | `paused` | uri, position ms | paused at that position |

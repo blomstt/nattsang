@@ -9,7 +9,9 @@ namespace Nattsang.Core;
 //     @define-color accent #80d4d9;
 //
 // Unknown names and values that aren't #rgb or #rrggbb are ignored, so a
-// half-written file never breaks the window. Comments are CSS's: /* to */,
+// half-written file never breaks the window. The window reads it again
+// whenever it changes (a matugen template can write it as the wallpaper
+// changes: see the README). Comments are CSS's: /* to */,
 // and one that's never closed runs to the end of the file.
 public sealed class Palette
 {
@@ -46,6 +48,12 @@ public sealed class Palette
     public uint Label => colors["label"];
     public uint Groove => colors["groove"];
     public uint Dim => colors["dim"];
+    public uint Border => colors["border"];
+    public uint Background => colors["background"];
+
+    // Every colour the same as other's: a file that changed but says the
+    // same needs nothing done.
+    public bool Same(Palette other) => Defaults.All(d => colors[d.Name] == other.colors[d.Name]);
 
     const string Define = "@define-color";
 

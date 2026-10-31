@@ -1,7 +1,7 @@
 # Nattsang
 
 A music player that looks like it lives in a terminal: one GTK 4 window,
-monospace, box-drawn panels, colours from your wallpaper. Written in C# and
+box-drawn panels set in FreeSerif, colours from your wallpaper. Written in C# and
 compiled ahead of time to a single native binary.
 
 It plays from Spotify through a small helper program, `nattsang-helper`,
@@ -12,16 +12,19 @@ This is the fifth stage: it signs in, and the library panel shows your
 account: your liked songs, your playlists, your saved albums and the
 artists you follow. Open a playlist, album or artist to see what's in it,
 search for songs, and play from any list: the list plays on from there,
-one track into the next without a gap, after whatever you've queued. The
+one track into the next without a gap, after whatever you've queued,
+shuffled or repeated if you like, at Nattsang's own volume. The playing
+song's cover shows beside its title. The
 lyrics come from [LRCLIB](https://lrclib.net) and follow the song line by
 line, media keys, `playerctl` and status bars see and steer it over
 MPRIS, and the visualizer moves with the music.
 
 ## Build and run
 
-Needs the .NET 10 SDK, GTK 4.12 or newer and the Cascadia Code font;
-libsoup 3 and glib-networking for the lyrics (without them the lyrics
-panel says so, and the rest works); for the helper, Rust 1.85 or newer, OpenSSL and PulseAudio's libraries (PipeWire's
+Needs the .NET 10 SDK, GTK 4.12 or newer and the FreeSerif font (GNU
+FreeFont: `gnu-free-fonts` on Arch, `fonts-freefont-ttf` on Debian);
+libsoup 3 and glib-networking for the lyrics and the covers (without them
+the lyrics panel says so, the cover shows its placeholder, and the rest works); for the helper, Rust 1.85 or newer, OpenSSL and PulseAudio's libraries (PipeWire's
 PulseAudio server works).
 
 Build the helper first; the .NET build then puts it beside the window's
@@ -63,7 +66,8 @@ happens once. To sign out, delete that folder.
 While the login page is open, the helper listens on 127.0.0.1 port 5588 for
 the browser to come back; nothing else listens. It isn't a Spotify Connect
 device, so phones don't see it. It plays at 320 kbps, as recorded (no volume
-normalisation), through PulseAudio.
+normalisation), through PulseAudio, keeping a fifth of a second of sound
+buffered there (so a pause or a change of volume is heard that soon).
 
 The library, the search and the track details come from the service's own
 internal endpoints, the ones its official client uses, not the public Web
@@ -86,12 +90,33 @@ looking at; `Enter` searches all songs and opens what it finds. Only songs
 can be searched for: open a song's album with `o` and its artist with
 `r`.
 
+The playlists tab lists each playlist's name and how many songs it has.
+An open playlist shows its songs beside the names, so another is one
+click away: drag the line between them (anywhere along it) to make the
+names wider or narrower, from 180 to 520 px; the width is remembered.
+
 Long lists load as you scroll down. Each list is loaded once, the first
 time you open it, and kept until Nattsang closes.
 
 `a` adds the selected song to the queue. What's queued plays before the
 rest of the list, in order; the queue view (`q`) shows the queue and then
 what comes next from the list.
+
+## Shuffle, repeat and volume
+
+The buttons either side of the transport: shuffle (`⇄`, lit with a dot
+under it when on) plays the list you're playing from in a random order,
+each song once, the one playing first; turned off, the list goes on in its
+own order from there. Repeat (`↻`) goes from off, to the list (lit), to
+one song (lit, with a `1`): off stops after the list's last song, the
+list starts it again (shuffled again, when shuffle is on), one song plays
+the same song again. `n` and `p` move through the order either way, and
+what's queued still plays first.
+
+The volume at the right of the key bar is Nattsang's own: the system's
+stays as it is. `+` and `-` turn it up and down by 5 %, and so does the
+wheel over it; click or drag on its bar to set it. It's remembered, with
+the playlist names' width, in `~/.local/state/nattsang/state`.
 
 ## Lyrics
 
@@ -123,8 +148,12 @@ with it:
 
 A second window (`NATTSANG_APP_ID`) is `nattsang.instance<pid>`.
 `playerctl` and desktops call raise (brings the window forward) and quit
-(closes it, as the `×` does). The volume isn't Nattsang's to set: use the
-system's.
+(closes it, as the `×` does). Volume (Nattsang's own, 0 to 1), Shuffle
+and LoopStatus can be read and set too:
+
+    playerctl -p nattsang volume 0.5
+    playerctl -p nattsang shuffle toggle
+    playerctl -p nattsang loop Playlist     # None, Playlist or Track
 
 ## The visualizer
 
@@ -146,6 +175,7 @@ move on their own, as in the design.
 | `a`         | add the selected track to the queue |
 | `q`         | switch between lyrics and queue   |
 | `v`         | visualizer on / off               |
+| `+` `-`     | volume up / down                  |
 | `o`         | open the selected song's album    |
 | `r`         | open the selected song's artist   |
 | `Backspace` | back                              |
@@ -181,19 +211,40 @@ The window has built-in colours. To change them, write
     @define-color handle     #635f65;
     @define-color muted      #4a484e;
 
-The file is read at start. Values are `#rgb` or `#rrggbb`; anything else is ignored.
+Values are `#rgb` or `#rrggbb`; anything else is ignored. The file is
+watched: the window takes new colours as soon as it changes, without a
+restart (and without looking at it in between).
+
+To have them follow the wallpaper with [matugen](https://github.com/InioX/matugen),
+add a template that writes that file, for example:
+
+    [templates.nattsang]
+    input_path = '~/.config/matugen/templates/nattsang-colors.css'
+    output_path = '~/.config/nattsang/colors.css'
+
+with lines like `@define-color accent {{colors.blue.default.hex}};` for
+each name above.
+
+## The cover
+
+The playing song's cover shows at the left of its title, as the service
+has it (up to 640 px). Each is fetched once and kept in
+`~/.cache/nattsang/covers/`. A new song's cover replaces the last one
+when it has come in; a song with none shows a placeholder.
 
 ## Layout
 
     src/Core/       the model: tracks, lists, where the library is, the queue and
-                    what plays next, time, lyrics (LRC, LRCLIB, the cache),
+                    what plays next (shuffle, repeat), time, lyrics (LRC, LRCLIB,
+                    the cache), the volume, what's remembered, covers on disk,
                     colours, motion curves
     src/Playback/   what plays and where the lists come from: IPlayback and
                     ILibrary; SpotifyPlayback and SpotifyLibrary, which follow
                     the helper over its protocol; the simulated sample; finding
                     lyrics; what MPRIS says
     src/Gui/        the GTK window, bound by hand (Native.cs), no packages;
-                    Helper.cs runs the helper, Http.cs asks LRCLIB (libsoup),
+                    Helper.cs runs the helper, Http.cs asks LRCLIB and fetches
+                    covers (libsoup), Split.cs is an open playlist beside the names,
                     MprisBus.cs is MPRIS (GDBus)
     helper/         nattsang-helper, in Rust: librespot, signing in, playing;
                     sink.rs the PulseAudio output, levels.rs the visualizer's measure

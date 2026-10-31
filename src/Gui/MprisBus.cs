@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using Nattsang.Core;
 using Nattsang.Playback;
 using static Nattsang.Gui.Ui;
 
@@ -15,7 +16,8 @@ sealed unsafe class MprisBus
     const string ObjectPath = "/org/mpris/MediaPlayer2";
     const string Root = "org.mpris.MediaPlayer2", Player = "org.mpris.MediaPlayer2.Player";
 
-    // Volume and Rate are writable, as the spec has them; a write does nothing.
+    // Rate is writable, as the spec has it; a write does nothing. Volume,
+    // Shuffle and LoopStatus are Nattsang's own: written, they change it.
     const string Xml = """
         <node>
           <interface name="org.mpris.MediaPlayer2">
@@ -43,6 +45,8 @@ sealed unsafe class MprisBus
             <property name="Rate" type="d" access="readwrite"/>
             <property name="Metadata" type="a{sv}" access="read"/>
             <property name="Volume" type="d" access="readwrite"/>
+            <property name="Shuffle" type="b" access="readwrite"/>
+            <property name="LoopStatus" type="s" access="readwrite"/>
             <property name="Position" type="x" access="read"/>
             <property name="MinimumRate" type="d" access="read"/>
             <property name="MaximumRate" type="d" access="read"/>
@@ -58,11 +62,12 @@ sealed unsafe class MprisBus
 
     // What PropertiesChanged tells about: everything of the player's that
     // changes but Position (which moves by itself, as the spec says).
-    static readonly string[] Followed = ["PlaybackStatus", "Metadata", "CanGoNext", "CanGoPrevious", "CanPlay", "CanPause", "CanSeek"];
+    static readonly string[] Followed = ["PlaybackStatus", "Metadata", "CanGoNext", "CanGoPrevious", "CanPlay", "CanPause", "CanSeek", "Shuffle", "LoopStatus", "Volume"];
 
     static MprisBus? live; // the callbacks find it here: one window, one of these
 
     readonly IPlayback player;
+    readonly Volume volume;
     readonly Action raise, quit;
     readonly nint connection;
     uint rootId, playerId, nameId;
@@ -71,17 +76,18 @@ sealed unsafe class MprisBus
     double lastPosition, lastAt;
     bool lastPlaying;
 
-    MprisBus(nint connection, IPlayback player, Action raise, Action quit)
+    MprisBus(nint connection, IPlayback player, Volume volume, Action raise, Action quit)
     {
         this.connection = connection;
         this.player = player;
+        this.volume = volume;
         this.raise = raise;
         this.quit = quit;
     }
 
     // On the application's connection, as Nattsang (or, for a second
     // window, an instance of it); null when there's no bus.
-    public static MprisBus? Start(nint app, IPlayback player, Action raise, Action quit, bool second)
+    public static MprisBus? Start(nint app, IPlayback player, Volume volume, Action raise, Action quit, bool second)
     {
         var connection = N.g_application_get_dbus_connection(app);
         if (connection == 0) return null;
@@ -93,7 +99,7 @@ sealed unsafe class MprisBus
         vtable[1] = (nint)(delegate* unmanaged<nint, nint, nint, nint, nint, nint*, nint, nint>)&Get;
         vtable[2] = (nint)(delegate* unmanaged<nint, nint, nint, nint, nint, nint, nint*, nint, int>)&Set;
 
-        var bus = new MprisBus(connection, player, raise, quit);
+        var bus = new MprisBus(connection, player, volume, raise, quit);
         bus.rootId = N.g_dbus_connection_register_object(connection, ObjectPath, N.g_dbus_node_info_lookup_interface(node, Root), (nint)vtable, 0, 0, &error);
         if (bus.rootId != 0)
             bus.playerId = N.g_dbus_connection_register_object(connection, ObjectPath, N.g_dbus_node_info_lookup_interface(node, Player), (nint)vtable, 0, 0, &error);
@@ -107,6 +113,8 @@ sealed unsafe class MprisBus
         live = bus;
         player.Changed += bus.Changed;
         player.Order.Queue.Changed += bus.Changed;
+        player.Order.Changed += bus.Changed;
+        volume.Changed += bus.Changed;
         bus.Changed(); // what it says from now on is what changed from here
         return bus;
     }
@@ -115,6 +123,8 @@ sealed unsafe class MprisBus
     {
         player.Changed -= Changed;
         player.Order.Queue.Changed -= Changed;
+        player.Order.Changed -= Changed;
+        volume.Changed -= Changed;
         if (nameId != 0) N.g_bus_unown_name(nameId);
         if (playerId != 0) N.g_dbus_connection_unregister_object(connection, playerId);
         if (rootId != 0) N.g_dbus_connection_unregister_object(connection, rootId);
@@ -139,7 +149,10 @@ sealed unsafe class MprisBus
         "Identity" => Mpris.Identity,
         "SupportedUriSchemes" or "SupportedMimeTypes" => Array.Empty<string>(),
         "PlaybackStatus" => Mpris.Status(player),
-        "Rate" or "Volume" or "MinimumRate" or "MaximumRate" => 1.0,
+        "Rate" or "MinimumRate" or "MaximumRate" => 1.0,
+        "Volume" => volume.Mpris,
+        "Shuffle" => player.Order.Shuffle,
+        "LoopStatus" => Mpris.LoopStatus(player.Order.Repeat),
         "Metadata" => Mpris.Metadata(player.Track, player.Cover),
         "Position" => Mpris.Microseconds(player.Position),
         "CanGoNext" or "CanGoPrevious" or "CanPause" => player.Track.Uri.Length > 0,
@@ -196,6 +209,7 @@ sealed unsafe class MprisBus
         string s => s,
         bool b => b ? "1" : "0",
         long l => l.ToString(System.Globalization.CultureInfo.InvariantCulture),
+        double d => BitConverter.DoubleToInt64Bits(d).ToString(System.Globalization.CultureInfo.InvariantCulture),
         Mpris.ObjectPath p => p.Path,
         _ => "?",
     };
@@ -296,7 +310,32 @@ sealed unsafe class MprisBus
         catch (Exception e) { Console.Error.WriteLine(e); return 0; }
     }
 
-    // Volume and Rate stay 1: setting them does nothing.
+    // Volume, Shuffle and LoopStatus change Nattsang's own (and say so
+    // through Changed); Rate stays 1. A value of the wrong type, or a loop
+    // status MPRIS doesn't have, changes nothing.
+    void Write(string name, nint value)
+    {
+        bool Is(string type)
+        {
+            var t = N.g_variant_type_new(type);
+            try { return N.g_variant_is_of_type(value, t); }
+            finally { N.g_variant_type_free(t); }
+        }
+        switch (name)
+        {
+            case "Volume" when Is("d"): volume.Set(Volume.FromMpris(N.g_variant_get_double(value))); break;
+            case "Shuffle" when Is("b"): player.Order.SetShuffle(N.g_variant_get_boolean(value) != 0); break;
+            case "LoopStatus" when Is("s"):
+                if (Mpris.RepeatOf(Str(N.g_variant_get_string(value, null))) is { } r) player.Order.Repeat = r;
+                break;
+        }
+    }
+
     [UnmanagedCallersOnly]
-    static int Set(nint connection, nint sender, nint path, nint iface, nint name, nint value, nint* error, nint data) => 1;
+    static int Set(nint connection, nint sender, nint path, nint iface, nint name, nint value, nint* error, nint data)
+    {
+        try { live?.Write(Str(name), value); }
+        catch (Exception e) { Console.Error.WriteLine(e); }
+        return 1;
+    }
 }

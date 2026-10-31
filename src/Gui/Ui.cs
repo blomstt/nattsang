@@ -58,6 +58,40 @@ static unsafe class Ui
         N.gtk_widget_add_controller(widget, controller);
     }
 
+    // A drag on widget: begin(x, y) where it started, update(dx, dy) how
+    // far it has gone since, end() when it's let go.
+    public static void OnDrag(nint widget, Action<double, double> begin, Action<double, double> update, Action end)
+    {
+        var drag = N.gtk_gesture_drag_new();
+        var points = (nint)(delegate* unmanaged<nint, double, double, nint, void>)&WithPoint;
+        N.g_signal_connect_data(drag, "drag-begin", points, Keep(begin), 0, 0);
+        N.g_signal_connect_data(drag, "drag-update", points, Keep(update), 0, 0);
+        N.g_signal_connect_data(drag, "drag-end", points, Keep((double _, double _) => end()), 0, 0);
+        N.gtk_widget_add_controller(widget, drag);
+    }
+
+    // The wheel over widget: scrolled(dx, dy) → handled; in steps (a
+    // touchpad's are added up into steps).
+    public static void OnScroll(nint widget, Func<double, double, bool> scrolled)
+    {
+        var scroll = N.gtk_event_controller_scroll_new(1 | 4); // GTK_EVENT_CONTROLLER_SCROLL_VERTICAL | DISCRETE
+        N.g_signal_connect_data(scroll, "scroll", (nint)(delegate* unmanaged<nint, double, double, nint, int>)&Scrolled, Keep(scrolled), 0, 0);
+        N.gtk_widget_add_controller(widget, scroll);
+    }
+
+    // The pointer over widget (true) or gone from it (false).
+    public static void OnHover(nint widget, Action<bool> hover)
+    {
+        var motion = N.gtk_event_controller_motion_new();
+        N.g_signal_connect_data(motion, "enter", (nint)(delegate* unmanaged<nint, double, double, nint, void>)&WithPoint, Keep((double _, double _) => hover(true)), 0, 0);
+        N.g_signal_connect_data(motion, "leave", (nint)(delegate* unmanaged<nint, nint, void>)&Plain, Keep(() => hover(false)), 0, 0);
+        N.gtk_widget_add_controller(widget, motion);
+    }
+
+    // A file monitor's changed(event): GFileMonitorEvent.
+    public static void OnFileChanged(nint monitor, Action<int> changed) =>
+        N.g_signal_connect_data(monitor, "changed", (nint)(delegate* unmanaged<nint, nint, nint, int, nint, void>)&FileChanged, Keep(changed), 0, 0);
+
     // draw(cr, width, height); its slot is freed with the area.
     public static void OnDraw(nint area, Action<nint, int, int> draw) =>
         N.gtk_drawing_area_set_draw_func(area, (nint)(delegate* unmanaged<nint, nint, int, int, nint, void>)&Draw, Keep(draw), (nint)(delegate* unmanaged<nint, void>)&Forget);
@@ -155,6 +189,27 @@ static unsafe class Ui
     static void WithPosition(nint self, uint position, nint data)
     {
         try { Handler<Action<uint>>(data)(position); }
+        catch (Exception e) { Report(e); }
+    }
+
+    [UnmanagedCallersOnly]
+    static void WithPoint(nint self, double x, double y, nint data)
+    {
+        try { Handler<Action<double, double>>(data)(x, y); }
+        catch (Exception e) { Report(e); }
+    }
+
+    [UnmanagedCallersOnly]
+    static int Scrolled(nint self, double dx, double dy, nint data)
+    {
+        try { return Handler<Func<double, double, bool>>(data)(dx, dy) ? 1 : 0; }
+        catch (Exception e) { Report(e); return 0; }
+    }
+
+    [UnmanagedCallersOnly]
+    static void FileChanged(nint monitor, nint file, nint other, int kind, nint data)
+    {
+        try { Handler<Action<int>>(data)(kind); }
         catch (Exception e) { Report(e); }
     }
 

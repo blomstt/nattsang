@@ -9,7 +9,7 @@ namespace Nattsang.Core;
 public static class Lyrics
 {
     public const double LineSeconds = 4;
-    public const int LineHeight = 28, Anchor = 6;
+    public const int LineHeight = 33, Anchor = 6; // 18 px type (Gui.Style.LyricSize) at 1.5, and 6 px between
 
     // What stands for a line with no words: a break in the song, or its intro.
     public const string Break = "♪";

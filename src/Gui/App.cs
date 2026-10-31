@@ -22,12 +22,16 @@ sealed unsafe partial class App
     // NATTSANG_APP_ID names another, to run a second one beside it.
     public const string Id = "dev.blomst.Nattsang";
 
-    readonly Palette palette;
+    Palette palette; // read again when the colours file changes (Recolor)
     readonly IPlayback player;
     readonly ILibrary lists; // the library's lists
     readonly Helper? helper;
     readonly LyricsSource? lyricsSource;
     readonly LevelFeed? levelFeed;
+    readonly Http? http;
+    // The volume and the widths, as they were left last time (Remembered).
+    readonly Remembered remembered = Remembered.Load(Remembered.FilePath());
+    readonly Volume volumeLevel;
     MprisBus? mpris;
     bool animations;
     nint app, window;
@@ -35,7 +39,7 @@ sealed unsafe partial class App
     bool vizOn = true;
 
     App(Palette palette, IPlayback player, ILibrary library, Helper? helper, Navigation nav,
-        LyricsSource? lyrics = null, LevelFeed? levels = null)
+        LyricsSource? lyrics = null, LevelFeed? levels = null, Http? http = null)
     {
         this.palette = palette;
         this.player = player;
@@ -44,6 +48,9 @@ sealed unsafe partial class App
         this.nav = nav;
         lyricsSource = lyrics;
         levelFeed = levels;
+        this.http = http;
+        volumeLevel = new(remembered.Volume);
+        playlistWidth = remembered.PlaylistWidth;
     }
 
     public static int Run(string[] args)
@@ -71,9 +78,10 @@ sealed unsafe partial class App
         {
             var helper = new Helper(path);
             var cache = LyricsCache.Default() is { } dir ? new LyricsCache(dir) : null;
-            var lyrics = new LyricsSource(cache, new Http(Lrclib.UserAgent).Get);
+            var http = new Http(Lrclib.UserAgent);
+            var lyrics = new LyricsSource(cache, http.Get);
             a = new App(Palette.Load(), new SpotifyPlayback(helper.Send, () => Clock, new Order(new Queue())),
-                new SpotifyLibrary(helper.Send), helper, new Navigation(Keys.Albums), lyrics, new LevelFeed(helper.Send));
+                new SpotifyLibrary(helper.Send), helper, new Navigation(Keys.Albums), lyrics, new LevelFeed(helper.Send), http);
         }
         N.g_set_application_name("Nattsang");
         var id = Environment.GetEnvironmentVariable("NATTSANG_APP_ID");
@@ -88,7 +96,7 @@ sealed unsafe partial class App
     {
         if (window != 0) { N.gtk_window_present(window); return; }
         animations = Animations;
-        var css = N.gtk_css_provider_new();
+        css = N.gtk_css_provider_new();
         N.gtk_css_provider_load_from_string(css, Style.Css(palette));
         N.gtk_style_context_add_provider_for_display(N.gdk_display_get_default(), css, 801);
 
@@ -119,8 +127,9 @@ sealed unsafe partial class App
         On(window, "destroy", Closed);
         player.Changed += Sync;
         player.Order.Queue.Changed += QueueChanged;
-        player.Order.Changed += NextChanged;
+        player.Order.Changed += OrderChanged;
         lists.Changed += ListChanged;
+        volumeLevel.Changed += VolumeChanged;
         QueueChanged();
         NextChanged();
         Sync();
@@ -138,6 +147,8 @@ sealed unsafe partial class App
             feed.Changed += LevelsChanged;
             WantLevels();
         }
+        player.SetVolume(volumeLevel.Gain); // after Start: the helper hears nothing before
+        WatchColors();
         ShowHere();
         // It opens wide enough for everything, the key bar on one line.
         var open = Need(Room.Part.None, -1);
@@ -155,7 +166,7 @@ sealed unsafe partial class App
         // Parts fade as they hide and show once it has its first size: a
         // compositor may give it the size it last had a few frames in.
         After(500, () => fading = true);
-        mpris = MprisBus.Start(app, player, () => N.gtk_window_present(window), Quit, secondWindow);
+        mpris = MprisBus.Start(app, player, volumeLevel, () => N.gtk_window_present(window), Quit, secondWindow);
     }
 
     // The ×: everything closes, through shutdown (Closed).
@@ -169,16 +180,21 @@ sealed unsafe partial class App
         mpris = null;
         helper?.Stop();
         Cancel(ref clock);
+        if (rememberLater != 0) { Cancel(ref rememberLater); remembered.Save(Remembered.FilePath()); }
+        Cancel(ref recolorLater);
+        Cancel(ref coverLater);
         player.Changed -= Sync;
         player.Order.Queue.Changed -= QueueChanged;
-        player.Order.Changed -= NextChanged;
+        player.Order.Changed -= OrderChanged;
         lists.Changed -= ListChanged;
+        volumeLevel.Changed -= VolumeChanged;
         if (levelFeed != null) levelFeed.Changed -= LevelsChanged;
     }
 
     // ---- keys ----------------------------------------------------------------
 
     const uint Space = 0x20, Slash = 0x2f, KeyA = 0x61, KeyN = 0x6e, KeyO = 0x6f, KeyP = 0x70, KeyQ = 0x71, KeyR = 0x72, KeyV = 0x76;
+    const uint Plus = 0x2b, Minus = 0x2d, KpAdd = 0xffab, KpSubtract = 0xffad;
     const uint Escape = 0xff1b, Return = 0xff0d, KpEnter = 0xff8d, BackSpace = 0xff08;
     const uint Modifiers = 4 | 8 | 1 << 26 | 1 << 27 | 1 << 28; // Control, Alt, Super, Hyper, Meta
 
@@ -206,6 +222,8 @@ sealed unsafe partial class App
             case BackSpace: Back(); return true;
             case KeyQ: ShowQueue(!showingQueue); return true;
             case KeyV: ToggleViz(); return true;
+            case Plus or KpAdd: volumeLevel.Up(); return true;
+            case Minus or KpSubtract: volumeLevel.Down(); return true;
         }
         return false;
     }
@@ -234,10 +252,9 @@ sealed unsafe partial class App
             N.gtk_label_set_text(queueNowTime, Time.Format(t.Seconds));
             MarkCurrentRow();
             LyricsForTrack(t, pos, first);
-            // Near the end of what's in of the list it plays from, its next page.
-            var list = player.Order.List;
-            if (list.More && player.Order.At >= list.Count - 3) lists.More(list);
+            MoreOfPlaying();
         }
+        ShowCover(player.Cover);
         // While the player can't play (signing in, an error), its status
         // stands where the track's title goes; with the now playing panel
         // hidden, it isn't shown anywhere.
@@ -246,7 +263,8 @@ sealed unsafe partial class App
         {
             shownStatus = status;
             N.gtk_label_set_text(song, status?.Title ?? t.Title);
-            N.gtk_label_set_text(sub, status?.Detail ?? (none ? "" : $"{t.Artist} · {t.Album}"));
+            N.gtk_label_set_text(sub, status?.Detail ?? t.Artist);
+            ShowContext();
         }
         // A new track, or the same one back towards its start, slides the bar.
         if (!first && (newTrack || pos + 0.5 < lastPosition)) ProgressJump();
@@ -297,6 +315,87 @@ sealed unsafe partial class App
         }
         LyricLine(pos);
         N.gtk_widget_queue_draw(progress);
+    }
+
+    // The list it plays from: near the end of what's in of it, its next
+    // page; shuffled, every page as it comes, so all of it can come up.
+    void MoreOfPlaying()
+    {
+        var order = player.Order;
+        if (order.List.More && (order.Shuffle || order.At >= order.List.Count - 3)) lists.More(order.List);
+    }
+
+    // Shuffle or repeat changed, or where it is in the list.
+    void OrderChanged()
+    {
+        NextChanged();
+        ShowModes();
+        ShowContext();
+    }
+
+    // ---- what it remembers -------------------------------------------------------
+
+    uint rememberLater;
+
+    // Saved half a second after the last change, so a drag writes once.
+    void Remember()
+    {
+        Cancel(ref rememberLater);
+        rememberLater = After(500, () =>
+        {
+            rememberLater = 0;
+            remembered.Save(Remembered.FilePath());
+        });
+    }
+
+    // ---- colours -----------------------------------------------------------------
+
+    nint css, colorsMonitor;
+    uint recolorLater;
+
+    // The colours file is watched (inotify, through GLib), so a matugen
+    // template writing it as the wallpaper changes recolours the window
+    // as it is; nothing runs until it changes. Its folder is made if it
+    // isn't there: a missing folder can't be watched without polling.
+    void WatchColors()
+    {
+        var path = Palette.FilePath();
+        try { Directory.CreateDirectory(Path.GetDirectoryName(path)!); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+        nint error = 0;
+        colorsMonitor = N.g_file_monitor_file(N.g_file_new_for_path(path), 0, 0, &error);
+        if (colorsMonitor == 0)
+        {
+            Console.Error.WriteLine($"nattsang: can't watch {path}: {(error != 0 ? Str(*(nint*)(error + 8)) : "")}");
+            if (error != 0) N.g_error_free(error);
+            return;
+        }
+        OnFileChanged(colorsMonitor, kind =>
+        {
+            // Written (done), made, gone, moved in or over: read it again,
+            // once, when the writing has settled.
+            if (kind is not (1 or 2 or 3 or 7 or 8 or 9)) return;
+            Cancel(ref recolorLater);
+            recolorLater = After(150, () =>
+            {
+                recolorLater = 0;
+                Recolor(Palette.Load());
+            });
+        });
+    }
+
+    // New colours: the stylesheet, and what's coloured outside it (markup
+    // and drawing) made again.
+    void Recolor(Palette next)
+    {
+        if (next.Same(palette)) return;
+        palette = next;
+        N.gtk_css_provider_load_from_string(css, Style.Css(palette));
+        foreach (var (label, key, what) in keyHints) N.gtk_label_set_markup(label, KeyMarkup(key, what));
+        foreach (var item in made.Keys) FillRow(item);
+        QueueChanged();
+        NextChanged();
+        foreach (var a in (nint[])[progress, pills, lyricsArea, volumeBar, divider, .. eqAreas]) N.gtk_widget_queue_draw(a);
     }
 
     void ToggleViz()

@@ -23,8 +23,8 @@ public interface IPlayback
     // Stop, or after the list's last track has ended. Paused is not stopped.
     bool Stopped { get; }
 
-    // The track's cover image, a URL; "" when the player didn't say. The
-    // window shows no art: this is for the desktop (MPRIS).
+    // The track's cover image, a URL; "" when the player didn't say: for
+    // the now playing panel and the desktop (MPRIS).
     string Cover { get; }
 
     // Seconds into the track, now; moves on its own while playing. Computed
@@ -46,6 +46,7 @@ public interface IPlayback
     void Play(Listing list, int index); // starts that track, playing, and the list after it
     void Stop();      // stops the track; Toggle plays it again from the start
     void Seek(double seconds); // within the track, playing or paused
+    void SetVolume(double gain); // Nattsang's own volume: what the samples are multiplied by, 0 to 1
 }
 
 // A heading and a line under it, shown where the track's title goes.

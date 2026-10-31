@@ -101,6 +101,7 @@ static unsafe partial class N
     [LibraryImport(Gtk, StringMarshalling = U)] public static partial void gtk_label_set_text(nint l, string text);
     [LibraryImport(Gtk, StringMarshalling = U)] public static partial void gtk_label_set_markup(nint l, string markup);
     [LibraryImport(Gtk)] public static partial void gtk_label_set_xalign(nint l, float x);
+    [LibraryImport(Gtk)] public static partial void gtk_label_set_yalign(nint l, float y);
     [LibraryImport(Gtk)] public static partial void gtk_label_set_ellipsize(nint l, int mode);
     [LibraryImport(Gtk)] public static partial void gtk_label_set_wrap(nint l, [MarshalAs(UnmanagedType.Bool)] bool v);
     [LibraryImport(Gtk)] public static partial void gtk_label_set_width_chars(nint l, int n);
@@ -116,6 +117,7 @@ static unsafe partial class N
     [LibraryImport(Gtk)] public static partial void gtk_scrolled_window_set_child(nint sw, nint child);
     [LibraryImport(Gtk)] public static partial void gtk_scrolled_window_set_policy(nint sw, int h, int v);
     [LibraryImport(Gtk)] public static partial nint gtk_list_box_new();
+    [LibraryImport(Gtk)] public static partial void gtk_list_box_unselect_all(nint lb);
     [LibraryImport(Gtk)] public static partial void gtk_list_box_append(nint lb, nint child);
     [LibraryImport(Gtk)] public static partial void gtk_list_box_remove_all(nint lb);
     [LibraryImport(Gtk)] public static partial void gtk_list_box_remove(nint lb, nint child);
@@ -156,6 +158,22 @@ static unsafe partial class N
     [LibraryImport(Gtk)] public static partial void gtk_drawing_area_set_content_height(nint area, int height);
     [LibraryImport(Gtk)] public static partial void gtk_drawing_area_set_content_width(nint area, int width);
     [LibraryImport(Gtk)] public static partial nint gtk_event_controller_key_new();
+    // Pointer input: a drag (the divider, the volume bar), the wheel (the
+    // volume), the pointer coming and going (the divider's line lights up).
+    [LibraryImport(Gtk)] public static partial nint gtk_gesture_drag_new();
+    [LibraryImport(Gtk)] public static partial nint gtk_event_controller_scroll_new(int flags);
+    [LibraryImport(Gtk)] public static partial nint gtk_event_controller_motion_new();
+    [LibraryImport(Gtk, StringMarshalling = U)] public static partial void gtk_widget_set_cursor_from_name(nint w, string? name);
+    // The cover: a picture of a texture made from the image file's bytes.
+    [LibraryImport(Gtk)] public static partial nint gtk_picture_new();
+    [LibraryImport(Gtk)] public static partial void gtk_picture_set_paintable(nint picture, nint paintable);
+    [LibraryImport(Gtk)] public static partial void gtk_picture_set_content_fit(nint picture, int fit);
+    [LibraryImport(Gtk)] public static partial void gtk_picture_set_can_shrink(nint picture, [MarshalAs(UnmanagedType.Bool)] bool v);
+    [LibraryImport(Gtk)] public static partial nint gdk_texture_new_from_bytes(nint bytes, nint* error);
+    [LibraryImport(GLib)] public static partial nint g_bytes_new(byte* data, nint size);
+    // The colours file, watched (inotify, through GLib): no polling.
+    [LibraryImport(Gio, StringMarshalling = U)] public static partial nint g_file_new_for_path(string path);
+    [LibraryImport(Gio)] public static partial nint g_file_monitor_file(nint file, int flags, nint cancellable, nint* error);
     [LibraryImport(Gtk)] public static partial void gtk_event_controller_set_propagation_phase(nint controller, int phase);
 
     // Pango
@@ -167,6 +185,7 @@ static unsafe partial class N
     [LibraryImport(Pango)] public static partial void pango_layout_get_size(nint layout, int* width, int* height);
     [LibraryImport(Pango)] public static partial void pango_layout_set_width(nint layout, int width);
     [LibraryImport(Pango)] public static partial void pango_layout_set_ellipsize(nint layout, int mode);
+    [LibraryImport(Pango)] public static partial void pango_layout_set_alignment(nint layout, int alignment);
     [LibraryImport(Pango, StringMarshalling = U)] public static partial nint pango_font_description_from_string(string text);
     [LibraryImport(Pango)] public static partial void pango_font_description_set_absolute_size(nint desc, double size);
     [LibraryImport(Pango)] public static partial void pango_font_description_set_weight(nint desc, int weight);
@@ -221,6 +240,8 @@ static unsafe partial class N
     [LibraryImport(GLib)] public static partial nint g_variant_n_children(nint v);
     [LibraryImport(GLib)] public static partial nint g_variant_get_child_value(nint v, nint i);
     [LibraryImport(GLib)] public static partial long g_variant_get_int64(nint v);
+    [LibraryImport(GLib)] public static partial double g_variant_get_double(nint v);
+    [LibraryImport(GLib)] public static partial int g_variant_get_boolean(nint v);
     [LibraryImport(GLib)] public static partial nint g_variant_get_string(nint v, nint* length);
     [LibraryImport(GLib, StringMarshalling = U)] [return: MarshalAs(UnmanagedType.Bool)] public static partial bool g_variant_is_of_type(nint v, nint type);
     [LibraryImport(GLib)] public static partial void g_variant_unref(nint v);

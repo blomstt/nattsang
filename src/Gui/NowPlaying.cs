@@ -4,11 +4,12 @@ using static Nattsang.Gui.Ui;
 
 namespace Nattsang.Gui;
 
-// The now playing panel: the title, the lyrics | queue tabs and the view
-// under them. A view that comes in rises 10 px and fades in (0.4 s).
+// The now playing panel: the cover, and beside it the title, the artist and
+// what it plays from; the lyrics | queue tabs and the view under them,
+// both in the middle. A view that comes in rises 10 px and fades in (0.4 s).
 sealed unsafe partial class App
 {
-    nint song, sub, lyricsTab, queueTab, swap, lyricsArea, queueView;
+    nint song, sub, context, lyricsTab, queueTab, swap, lyricsArea, queueView;
     nint queueNowTitle, queueNowTime, queueList, queueSummary, queueHead;
     bool showingQueue;
 
@@ -16,16 +17,19 @@ sealed unsafe partial class App
     {
         song = Label("", "song");
         sub = Label("", "sub");
+        context = Label("", "ctx");
         N.gtk_label_set_wrap(song, true);
         N.gtk_label_set_wrap(sub, true);
-        var heading = Add(Box(Vertical, 4), song, sub);
+        N.gtk_label_set_wrap(context, true);
+        var heading = Add(Box(Vertical, 6), song, sub, context);
+        N.gtk_widget_set_valign(heading, Center);
+        N.gtk_widget_set_hexpand(heading, true);
+        var head = Add(Box(Horizontal, 20), BuildCover(), heading);
 
         lyricsTab = Button("lyrics", null, () => ShowQueue(false), "tab", "on");
         queueTab = Button("queue", null, () => ShowQueue(true), "tab");
         var tabs = Add(Box(Horizontal, 4, "tabs"), lyricsTab, queueTab);
-        // The title at the left and the tabs at the right, on its bottom; a
-        // long title pushes the tabs onto a line of their own.
-        var head = Add(Wrap.Row(12, 12, Wrap.Align.End), Wrap.Item(heading, 1), tabs);
+        N.gtk_widget_set_halign(tabs, Center);
 
         lyricsArea = Area(-1, SwapHeight);
         OnDraw(lyricsArea, DrawLyrics);
@@ -43,8 +47,117 @@ sealed unsafe partial class App
         N.gtk_widget_set_parent(lyricsArea, swap);
         N.gtk_widget_set_parent(queueView, swap);
 
-        var panel = Add(Box(Vertical, 16, "panel", "now"), head, swap);
+        var panel = Add(Box(Vertical, 14, "panel", "now"), head, tabs, swap);
         return Titled(panel, "now playing", out _);
+    }
+
+    // The third line: the list it plays from (its album, when that's all
+    // it plays from); nothing while the player says something else there.
+    void ShowContext()
+    {
+        var t = player.Track;
+        var from = player.Order.List.Title;
+        var text = player.Status != null || t.Uri.Length == 0 ? "" : from.Length > 0 ? from : t.Album;
+        N.gtk_label_set_text(context, text);
+        N.gtk_widget_set_visible(context, text.Length > 0);
+    }
+
+    // ---- the cover -------------------------------------------------------------
+
+    // Its picture over a placeholder: the placeholder shows while there's
+    // none (or it couldn't be had). A new track keeps the cover it has until
+    // the next one is in, so nothing flashes between them; one with no cover
+    // gets the placeholder after NoCoverWait.
+    const int CoverSize = 148, NoCoverWait = 1500, CoversKept = 8;
+    nint coverPicture, coverNone;
+    string coverUrl = "", coverWanted = "";
+    uint coverLater;
+    readonly List<(string Url, nint Texture)> coverTextures = []; // the last few, newest last
+
+    nint BuildCover()
+    {
+        coverNone = Label("♪", "art-none");
+        N.gtk_label_set_yalign(coverNone, 1);
+        N.gtk_widget_set_size_request(coverNone, CoverSize - 2, CoverSize - 2); // inside its 1 px border
+        coverPicture = N.gtk_picture_new();
+        N.gtk_picture_set_content_fit(coverPicture, 2); // GTK_CONTENT_FIT_COVER
+        N.gtk_picture_set_can_shrink(coverPicture, true);
+        N.gtk_widget_set_visible(coverPicture, false);
+        var art = Css(N.gtk_overlay_new(), "art");
+        N.gtk_overlay_set_child(art, coverNone);
+        N.gtk_overlay_add_overlay(art, coverPicture); // drawn at the placeholder's size, whatever the image's
+        N.gtk_widget_set_overflow(art, 1);
+        N.gtk_widget_set_valign(art, Center);
+        Name(art, "Album cover");
+        return art;
+    }
+
+    void ShowCover(string url)
+    {
+        if (url == coverWanted) return;
+        coverWanted = url;
+        Cancel(ref coverLater);
+        if (url.Length == 0)
+        {
+            coverLater = After(NoCoverWait, () =>
+            {
+                coverLater = 0;
+                if (coverWanted.Length == 0) SetCover("", 0);
+            });
+            return;
+        }
+        var kept = coverTextures.FindIndex(c => c.Url == url);
+        if (kept >= 0) { SetCover(url, coverTextures[kept].Texture); return; }
+        if (Covers.Dir() is { } dir && Covers.Load(dir, url) is { } bytes) { CoverFrom(url, bytes); return; }
+        if (http == null) { SetCover("", 0); return; }
+        http.Fetch(url, (status, body, why) =>
+        {
+            if (status == 200 && body is { Length: > 0 })
+            {
+                if (Covers.Dir() is { } d) Covers.Save(d, url, body);
+                if (url == coverWanted) CoverFrom(url, body);
+                return;
+            }
+            if (status != 200) Console.Error.WriteLine($"nattsang: no cover ({(status > 0 ? status.ToString() : why)})");
+            if (url == coverWanted) SetCover("", 0);
+        });
+    }
+
+    // An image's bytes made a texture (GDK reads PNG and JPEG); kept, and shown.
+    void CoverFrom(string url, byte[] image)
+    {
+        nint texture, error = 0;
+        fixed (byte* p = image)
+        {
+            var bytes = N.g_bytes_new(p, image.Length);
+            texture = N.gdk_texture_new_from_bytes(bytes, &error);
+            N.g_bytes_unref(bytes);
+        }
+        if (texture == 0)
+        {
+            Console.Error.WriteLine($"nattsang: can't read the cover: {(error != 0 ? Str(*(nint*)(error + 8)) : "")}");
+            if (error != 0) N.g_error_free(error);
+            SetCover("", 0);
+            return;
+        }
+        coverTextures.Add((url, texture));
+        if (coverTextures.Count > CoversKept)
+        {
+            N.g_object_unref(coverTextures[0].Texture);
+            coverTextures.RemoveAt(0);
+        }
+        SetCover(url, texture);
+    }
+
+    // The picture shows texture; none (0) shows the placeholder. The
+    // placeholder stays (it's what gives the cover its size), unseen.
+    void SetCover(string url, nint texture)
+    {
+        if (url == coverUrl && texture != 0) return;
+        coverUrl = url;
+        N.gtk_picture_set_paintable(coverPicture, texture);
+        N.gtk_widget_set_visible(coverPicture, texture != 0);
+        N.gtk_widget_set_opacity(coverNone, texture == 0 ? 1 : 0);
     }
 
     // ---- lyrics | queue --------------------------------------------------------
@@ -273,6 +386,7 @@ sealed unsafe partial class App
         var layout = N.pango_cairo_create_layout(cr);
         N.pango_layout_set_attributes(layout, lyricAttrs);
         N.pango_layout_set_ellipsize(layout, 3); // PANGO_ELLIPSIZE_END
+        N.pango_layout_set_alignment(layout, 1); // PANGO_ALIGN_CENTER: each line in the middle of the panel
         for (int i = 0; i < lyricLines.Length; i++)
         {
             var y = offset + i * h;
@@ -300,8 +414,8 @@ sealed unsafe partial class App
 
     static nint Font(int weight)
     {
-        var f = N.pango_font_description_from_string("Cascadia Code");
-        N.pango_font_description_set_absolute_size(f, 14 * 1024);
+        var f = N.pango_font_description_from_string(Style.Font);
+        N.pango_font_description_set_absolute_size(f, Style.LyricSize * 1024);
         N.pango_font_description_set_weight(f, weight);
         return f;
     }

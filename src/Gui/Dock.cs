@@ -3,13 +3,18 @@ using static Nattsang.Gui.Ui;
 
 namespace Nattsang.Gui;
 
-// The dock: the transport buttons, elapsed | progress | total, and the Pills
-// visualizer. Then the key bar under everything.
+// The dock: shuffle, the transport buttons and repeat, elapsed | progress |
+// total, and the Pills visualizer. Then the key bar under everything, with
+// Nattsang's own volume at its right: + and - step it, and the wheel over
+// it, a click or a drag on its bar set it.
 sealed unsafe partial class App
 {
     nint playButton, elapsed, total, progress, pills;
-    nint controls, volume;
+    nint controls, volume, volumeBar, volumePercent;
+    nint shuffleButton, shuffleDot, repeatButton, repeatOne;
     readonly List<nint> eqAreas = [], hints = [];
+    // The key hints, to colour their keys again when the colours change.
+    readonly List<(nint Label, string Key, string What)> keyHints = [];
 
     // The dock's gaps, the key bar's, and the least the progress bar may
     // shrink to (its area, the 14 px either side included) before the times
@@ -19,18 +24,27 @@ sealed unsafe partial class App
     nint BuildDock()
     {
         playButton = Button("▶", "Play", player.Toggle, "play", "playing");
+        shuffleDot = Box(Horizontal, 0, "dot");
+        N.gtk_widget_set_halign(shuffleDot, Center);
+        N.gtk_widget_set_valign(shuffleDot, End);
+        shuffleButton = Marked("⇄", shuffleDot, ToggleShuffle);
+        repeatOne = Label("1", "one");
+        N.gtk_widget_set_halign(repeatOne, End);
+        N.gtk_widget_set_valign(repeatOne, Start);
+        repeatButton = Marked("↻", repeatOne, player.Order.CycleRepeat);
         controls = Add(Box(Horizontal, 6),
-            Button("⇄", "Shuffle", Nothing, "ctl"),
+            shuffleButton,
             Button("⏮", "Previous", player.Previous, "ctl", "bright"),
             playButton,
             Button("⏭", "Next", player.Next, "ctl", "bright"),
-            Button("↻", "Repeat", Nothing, "ctl", "accent"));
+            repeatButton);
         N.gtk_widget_set_valign(controls, Center);
+        ShowModes();
 
-        elapsed = Label("0:00");
+        elapsed = Label("0:00", "time");
         N.gtk_label_set_xalign(elapsed, 1);
         N.gtk_label_set_width_chars(elapsed, 5);
-        total = Label("0:00");
+        total = Label("0:00", "time");
         N.gtk_label_set_width_chars(total, 5);
         // The bar's area takes in the 14 px gaps either side, so the thumb
         // and its glow can reach past the ends as the design's do.
@@ -45,26 +59,134 @@ sealed unsafe partial class App
         return Add(Wrap.Row(DockGap, 12, Wrap.Align.Center, "dock"), controls, Wrap.Item(bar, 1), pills);
     }
 
+    // A transport button with a mark over its glyph (shuffle's dot,
+    // repeat's 1), shown when it's on.
+    static nint Marked(string glyph, nint mark, Action clicked)
+    {
+        var layers = N.gtk_overlay_new();
+        N.gtk_overlay_set_child(layers, Label(glyph));
+        N.gtk_widget_set_can_target(mark, false);
+        N.gtk_overlay_add_overlay(layers, mark);
+        var b = Css(N.gtk_button_new(), "btn", "ctl", "bright");
+        N.gtk_button_set_child(b, layers);
+        N.gtk_widget_set_halign(N.gtk_widget_get_first_child(layers), Center);
+        On(b, "clicked", clicked);
+        return b;
+    }
+
+    // Shuffle lit with its dot when on; repeat lit for the list, lit with
+    // a 1 for one song. Their names say which, for screen readers.
+    void ShowModes()
+    {
+        var order = player.Order;
+        Class(shuffleButton, "on", order.Shuffle);
+        N.gtk_widget_set_visible(shuffleDot, order.Shuffle);
+        Name(shuffleButton, order.Shuffle ? "Shuffle: on" : "Shuffle: off");
+        Class(repeatButton, "on", order.Repeat != Order.Repeats.Off);
+        N.gtk_widget_set_visible(repeatOne, order.Repeat == Order.Repeats.One);
+        Name(repeatButton, order.Repeat switch
+        {
+            Order.Repeats.List => "Repeat: the list",
+            Order.Repeats.One => "Repeat: one song",
+            _ => "Repeat: off",
+        });
+    }
+
+    // Shuffled, the rest of a list it plays loads as it goes, so all of it
+    // can come up (MoreOfPlaying).
+    void ToggleShuffle()
+    {
+        player.Order.SetShuffle(!player.Order.Shuffle);
+        MoreOfPlaying();
+    }
+
+    string KeyMarkup(string key, string what) => $"<span foreground=\"{palette.Hex("accent")}\">{Escape(key)}</span> {what}";
+
+    nint Hint(string key, string what)
+    {
+        var l = Markup(KeyMarkup(key, what));
+        keyHints.Add((l, key, what));
+        return l;
+    }
+
     nint BuildKeyBar()
     {
-        string K(string key, string what) => $"<span foreground=\"{palette.Hex("accent")}\">{Escape(key)}</span> {what}";
         var vizName = Css(N.gtk_label_new("09 Pills"), "viz-name");
         N.gtk_label_set_width_chars(vizName, 21);
         var viz = Add(Box(Horizontal, 4),
-            Markup(K("v", "visualizer")),
+            Hint("v", "visualizer"),
             Button("◂", "Previous visualizer", Nothing, "arrow", "accent"),
             vizName,
             Button("▸", "Next visualizer", Nothing, "arrow", "accent"));
-        volume = Markup($"vol <span foreground=\"{palette.Hex("accent")}\">▮▮▮▮▮▮▮</span><span foreground=\"{palette.Hex("muted")}\">▯▯▯</span> 70%");
+
+        volumeBar = Area(VolumeWidth, 14);
+        N.gtk_widget_set_valign(volumeBar, Center);
+        OnDraw(volumeBar, DrawVolume);
+        N.gtk_widget_set_cursor_from_name(volumeBar, "pointer");
+        OnDrag(volumeBar, (x, _) => { dragFrom = x; SetVolumeAt(x); }, (dx, _) => SetVolumeAt(dragFrom + dx), () => { });
+        volumePercent = Label("", "vol-pct");
+        N.gtk_label_set_width_chars(volumePercent, 4);
+        N.gtk_label_set_xalign(volumePercent, 1);
+        volume = Add(Box(Horizontal, 10, "volume"), Label("vol"), volumeBar, volumePercent);
+        OnScroll(volume, (_, dy) =>
+        {
+            if (dy < 0) volumeLevel.Up();
+            else if (dy > 0) volumeLevel.Down();
+            return dy != 0;
+        });
+        ShowVolume();
+
         hints.AddRange([
-            Markup(K("/", "search")),
-            Markup(K("space", "play/pause")),
-            Markup(K("n p", "next/prev")),
-            Markup(K("a", "add to queue")),
-            Markup(K("q", "queue/lyrics"))]);
+            Hint("/", "search"),
+            Hint("space", "play/pause"),
+            Hint("n p", "next/prev"),
+            Hint("a", "add to queue"),
+            Hint("q", "queue/lyrics"),
+            Hint("+ −", "volume")]);
         var keys = Add(Wrap.Row(KeyGap, 6, Wrap.Align.Center, "keys"), [.. hints, Wrap.Item(Spacer(), 1), viz, volume]);
         hints.Add(viz); // the visualizer switcher hides with the hints; the volume stays
         return keys;
+    }
+
+    // ---- volume ------------------------------------------------------------------
+
+    const int VolumeWidth = 120;
+    double dragFrom;
+
+    void SetVolumeAt(double x) => volumeLevel.Set(Volume.AtX(x, N.gtk_widget_get_width(volumeBar)));
+
+    // The volume changed (keys, the bar, the wheel, MPRIS): the bar, the
+    // helper, and the state file a moment later.
+    void VolumeChanged()
+    {
+        ShowVolume();
+        player.SetVolume(volumeLevel.Gain);
+        remembered.Volume = volumeLevel.Percent;
+        Remember();
+    }
+
+    void ShowVolume()
+    {
+        N.gtk_label_set_text(volumePercent, $"{volumeLevel.Percent}%");
+        Name(volumeBar, $"Volume {volumeLevel.Percent}%");
+        N.gtk_widget_queue_draw(volumeBar);
+    }
+
+    // A 2 px line, the part up to the volume in the accent, and a 10 px knob.
+    void DrawVolume(nint cr, int width, int height)
+    {
+        var cy = height / 2.0;
+        var x = width * volumeLevel.Percent / (double)Volume.Full;
+        Rgb(cr, palette.Border);
+        N.cairo_rectangle(cr, 0, cy - 1, width, 2);
+        N.cairo_fill(cr);
+        Rgb(cr, palette.Accent);
+        N.cairo_rectangle(cr, 0, cy - 1, x, 2);
+        N.cairo_fill(cr);
+        Rgb(cr, palette.Bright);
+        N.cairo_new_path(cr);
+        N.cairo_arc(cr, Math.Clamp(x, 5, width - 5), cy, 5, 0, 2 * Math.PI);
+        N.cairo_fill(cr);
     }
 
     // ---- progress ----------------------------------------------------------------

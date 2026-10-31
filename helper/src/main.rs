@@ -217,6 +217,10 @@ fn command(line: &str, player: &Player, lists: &mpsc::UnboundedSender<(String, b
             _ => error(&format!("not a track: {uri}")),
         },
         ["levels", on] => sink::LEVELS.store(*on == "1", std::sync::atomic::Ordering::Relaxed),
+        ["volume", gain] => match gain.parse::<f64>() {
+            Ok(g) if g.is_finite() => sink::set_gain(g),
+            _ => error(&format!("not a volume: {gain}")),
+        },
         ["get", key] => drop(lists.send((key.to_string(), true))),
         ["more", key] => drop(lists.send((key.to_string(), false))),
         _ => error(&format!("unknown command: {line}")),

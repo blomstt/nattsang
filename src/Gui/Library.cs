@@ -16,6 +16,10 @@ namespace Nattsang.Gui;
 // The list is a list view: only the rows on screen are made, and they're
 // filled from the shown list as they scroll in, so a long list costs what
 // a short one does. Its next page is asked for as the end comes near.
+//
+// An open playlist shows beside the playlists' names (Split): the divider
+// between them can be dragged anywhere along it, and the names' width is
+// remembered.
 sealed unsafe partial class App
 {
     nint search, trackList, crumbs, note, moreNote, listScroll;
@@ -30,7 +34,7 @@ sealed unsafe partial class App
     // shows now (-1: nothing).
     sealed class RowWidgets
     {
-        public nint Box, Number, Eq, Title, Side;
+        public nint Box, Cell, Number, Eq, Title, Side;
         public int Shows = -1;
     }
     readonly Dictionary<nint, RowWidgets> made = [];
@@ -79,7 +83,7 @@ sealed unsafe partial class App
         N.gtk_label_set_wrap(note, true);
         N.gtk_label_set_wrap(moreNote, true);
 
-        var panel = Add(Box(Vertical, 10, "panel", "library"), searchBox, filters, Box(Horizontal, 0, "rule"), note, listScroll, moreNote);
+        var panel = Add(Box(Vertical, 10, "panel", "library"), searchBox, filters, Box(Horizontal, 0, "rule"), BuildSplit());
         N.gtk_widget_set_hexpand(panel, true);
 
         var overlay = N.gtk_overlay_new();
@@ -141,7 +145,9 @@ sealed unsafe partial class App
         shown = lists.Open(here.Key, here.Name);
         nav.Rename(here.Key, shown.Title);
         for (int i = 0; i < Keys.Tabs.Length; i++) Class(tabButtons[i], "label", Keys.Tabs[i] == nav.Under);
+        Class(trackList, "lines", shown.Rows == Rows.Playlists);
         ShowCrumbs();
+        ShowSplit();
         Refill();
         // The row it was on here before, else the playing track's.
         var from = shown.Rows == Rows.Tracks ? shown.Tracks.FindIndex(t => t.Uri == player.Track.Uri) : -1;
@@ -196,8 +202,14 @@ sealed unsafe partial class App
     // that's playing goes on further.
     void ListChanged(Listing l)
     {
-        if (l == player.Order.List) NextChanged();
+        if (l == player.Order.List)
+        {
+            NextChanged();
+            if (player.Order.Shuffle) MoreOfPlaying();
+        }
+        if (l == names) ShowNames();
         if (l != shown) return;
+        ShowSongsHead();
         nav.Rename(l.Key, l.Title);
         ShowCrumbs();
         var first = shownRows.Count == 0;
@@ -296,12 +308,12 @@ sealed unsafe partial class App
         N.gtk_widget_set_visible(r.Eq, false);
         OnDraw(r.Eq, DrawEq);
         eqAreas.Add(r.Eq);
-        var cell = Add(Box(Horizontal, 0), r.Number, r.Eq);
+        var cell = r.Cell = Add(Box(Horizontal, 0), r.Number, r.Eq);
         N.gtk_widget_set_size_request(cell, 36, -1);
         r.Title = Label("");
         N.gtk_widget_set_hexpand(r.Title, true);
         N.gtk_label_set_ellipsize(r.Title, 3); // PANGO_ELLIPSIZE_END
-        r.Side = Label("");
+        r.Side = Label("", "time");
         N.gtk_label_set_xalign(r.Side, 1);
         N.gtk_widget_set_size_request(r.Side, 56, -1);
         r.Box = Add(Box(Horizontal, 8, "trow"), cell, r.Title, r.Side);
@@ -331,6 +343,13 @@ sealed unsafe partial class App
             title = alone ? Escape(t.Title) : WithDetail(t.Title, t.Artist);
             side = Time.Format(t.Seconds);
         }
+        else if (shown.Rows == Rows.Playlists)
+        {
+            // A name and how many songs: whose it is isn't said.
+            var e = shown.Entries[i];
+            title = Escape(Keys.Named(e.Name));
+            side = e.Side;
+        }
         else
         {
             var e = shown.Entries[i];
@@ -339,6 +358,8 @@ sealed unsafe partial class App
             title = WithDetail(e.Name, by ? "" : e.Detail);
             side = e.Side;
         }
+        N.gtk_widget_set_visible(r.Cell, shown.Rows != Rows.Playlists);
+        Class(r.Side, "count", shown.Rows == Rows.Playlists);
         N.gtk_label_set_markup(r.Title, title);
         N.gtk_label_set_text(r.Side, side);
         MarkRow(r);

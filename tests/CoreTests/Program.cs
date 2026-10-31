@@ -62,8 +62,8 @@ Equal("lyrics: tone two ahead", Lyrics.Tone.Near, Lyrics.ToneAt(2));
 Equal("lyrics: tone three ahead", Lyrics.Tone.Far, Lyrics.ToneAt(3));
 Equal("lyrics: tone two back", Lyrics.Tone.Far, Lyrics.ToneAt(-2));
 Equal("lyrics: offset holds line 6 in place", 0.0, Lyrics.Offset(6));
-Equal("lyrics: offset at line 18", -336.0, Lyrics.Offset(18));
-Equal("lyrics: offset at line 0 pushes down", 168.0, Lyrics.Offset(0));
+Equal("lyrics: offset at line 18", -396.0, Lyrics.Offset(18));
+Equal("lyrics: offset at line 0 pushes down", 198.0, Lyrics.Offset(0));
 
 // ---- the queue ------------------------------------------------------------------
 
@@ -322,6 +322,281 @@ Equal("order: a page that came in is next", "Somewhere I Belong", order.Upcoming
 Equal("order: out of range clamps", "Somewhere I Belong", order.Play(growing, 99).Title);
 var emptyList = AlbumOf();
 Equal("order: an empty list plays nothing", Track.None, order.Play(emptyList, 0));
+
+// ---- shuffle and repeat ---------------------------------------------------------------------
+
+var ten = AlbumOf([.. Enumerable.Range(0, 10).Select(i => new Track($"spotify:track:t{i}", i + 1, $"t{i}", "a", "b", 100))]);
+string Titles(IEnumerable<Track> ts) => string.Join(",", ts.Select(t => t.Title));
+var mixed = new Order(new Queue(), new Random(7));
+var modeChanges = 0;
+mixed.Changed += () => modeChanges++;
+mixed.Play(ten, 3);
+modeChanges = 0;
+mixed.SetShuffle(true);
+Check("shuffle: on", mixed.Shuffle);
+Equal("shuffle: turning it on is a change", 1, modeChanges);
+Equal("shuffle: the track it's on stays", "t3", mixed.Current.Title);
+var round = mixed.Next(50).ToList();
+Equal("shuffle: every other track comes once", "t0,t1,t2,t4,t5,t6,t7,t8,t9", string.Join(",", round.Select(t => t.Title).Order()));
+Check("shuffle: in another order than the list's", Titles(round) != "t4,t5,t6,t7,t8,t9,t0,t1,t2" && Titles(round) != "t0,t1,t2,t4,t5,t6,t7,t8,t9", Titles(round));
+Equal("shuffle: upcoming is the order's next", round[0].Title, mixed.Upcoming(false)?.Title);
+var played = new List<string>();
+for (int i = 0; i < 9; i++) played.Add(mixed.Advance(false)!.Title);
+Equal("shuffle: next goes through the order as shown", Titles(round), string.Join(",", played));
+Equal("shuffle: at the order's end, without repeat, nothing", null, mixed.Advance(false));
+Equal("shuffle: and nothing follows", null, mixed.Following());
+Equal("shuffle: back goes back through it", round[^2].Title, mixed.Back(false)?.Title);
+mixed.Advance(false);
+var last = mixed.Current.Title;
+var again = mixed.Upcoming(true);
+Check("shuffle: round again (n), a new round, not starting with the last", again != null && again.Title != last, again?.Title ?? "");
+Equal("shuffle: upcoming said what the new round starts with", again?.Title, mixed.Advance(true)?.Title);
+Equal("shuffle: the new round has them all", 9, mixed.Next(50).Count());
+mixed.Play(ten, 5);
+Equal("shuffle: playing a row starts there", "t5", mixed.Current.Title);
+Equal("shuffle: and shuffles the rest after it", 9, mixed.Next(50).Count());
+Check("shuffle: without it in", mixed.Next(50).All(t => t.Title != "t5"));
+var queuedMix = mixed.Queue;
+queuedMix.Add(ten.Tracks[0]);
+Equal("shuffle: the queue still comes first", "t0", mixed.Upcoming(false)?.Title);
+Equal("shuffle: and plays first", "t0", mixed.Advance(false)?.Title);
+Equal("shuffle: the list's place stays", 5, mixed.At);
+var growMix = AlbumOf([.. ten.Tracks.Take(4)]);
+mixed.Play(growMix, 0);
+growMix.Tracks.AddRange(ten.Tracks.Skip(4));
+Equal("shuffle: a page that came in is shuffled into what's to come", "t1,t2,t3,t4,t5,t6,t7,t8,t9", string.Join(",", mixed.Next(50).Select(t => t.Title).Order()));
+mixed.Play(ten, 2);
+mixed.Advance(false);
+var atNow = mixed.At;
+modeChanges = 0;
+mixed.SetShuffle(false);
+Check("shuffle: off", !mixed.Shuffle);
+Equal("shuffle: off is a change", 1, modeChanges);
+Equal("shuffle: off, the list's own order on from where it is", Titles(ten.Tracks.Skip(atNow + 1)), Titles(mixed.Next(50)));
+mixed.SetShuffle(false);
+Equal("shuffle: off again changes nothing", 1, modeChanges);
+var fresh = new Order(new Queue(), new Random(1));
+fresh.SetShuffle(true);
+fresh.Play(ten, 0);
+Equal("shuffle: on before anything plays, a row still starts there", "t0", fresh.Current.Title);
+var none = new Order(new Queue(), new Random(1));
+none.SetShuffle(true);
+Equal("shuffle: on with no list, nothing comes", null, none.Advance(true));
+
+var rep = new Order(new Queue());
+Equal("repeat: off to begin with", Order.Repeats.Off, rep.Repeat);
+var repChanges = 0;
+rep.Changed += () => repChanges++;
+rep.CycleRepeat();
+Equal("repeat: then the list", Order.Repeats.List, rep.Repeat);
+rep.CycleRepeat();
+Equal("repeat: then one song", Order.Repeats.One, rep.Repeat);
+rep.CycleRepeat();
+Equal("repeat: then off again", Order.Repeats.Off, rep.Repeat);
+Equal("repeat: each is a change", 3, repChanges);
+var three = AlbumOf([.. ten.Tracks.Take(3)]);
+rep.Play(three, 2);
+Equal("repeat off: after the last, nothing follows", null, rep.Following());
+Equal("repeat off: and it ends", null, rep.Finish());
+rep.Repeat = Order.Repeats.List;
+Equal("repeat list: after the last, the first follows", "t0", rep.Following()?.Title);
+Equal("repeat list: and plays", "t0", rep.Finish()?.Title);
+Equal("repeat list: on through the list", "t1", rep.Finish()?.Title);
+rep.Repeat = Order.Repeats.One;
+Equal("repeat one: the same track follows", "t1", rep.Following()?.Title);
+Equal("repeat one: and plays again", "t1", rep.Finish()?.Title);
+Equal("repeat one: still at its row", 1, rep.At);
+rep.Queue.Add(ten.Tracks[9]);
+Equal("repeat one: even with a queue", "t1", rep.Finish()?.Title);
+Equal("repeat one: n still goes on (the queue first)", "t9", rep.Advance(true)?.Title);
+rep.Repeat = Order.Repeats.Off;
+var nothingYet = new Order(new Queue()) { Repeat = Order.Repeats.One };
+Equal("repeat one: before anything plays, nothing follows", null, nothingYet.Following());
+var shuffledRepeat = new Order(new Queue(), new Random(3)) { Repeat = Order.Repeats.List };
+shuffledRepeat.SetShuffle(true);
+shuffledRepeat.Play(three, 0);
+var seen = new List<string> { shuffledRepeat.Current.Title };
+for (int i = 0; i < 5; i++) seen.Add(shuffledRepeat.Finish()!.Title);
+Equal("repeat list, shuffled: each round has every track once", "t0,t1,t2|t0,t1,t2", string.Join(",", seen.Take(3).Order()) + "|" + string.Join(",", seen.Skip(3).Order()));
+
+// The player: preload and the end follow repeat.
+var repSent = new List<string>();
+string RepSent() { var all = string.Join(" | ", repSent); repSent.Clear(); return all; }
+var repPlayer = new SpotifyPlayback(l => repSent.Add(l.TrimEnd('\n')), () => 0, new Order(new Queue()));
+repPlayer.Play(three, 2);
+repPlayer.Receive("playing\tspotify:track:t2\t0");
+RepSent();
+repPlayer.Order.Repeat = Order.Repeats.List;
+repPlayer.Receive("near-end\tspotify:track:t2");
+Equal("helper: repeating the list, the first is preloaded after the last", "preload\tspotify:track:t0", RepSent());
+repPlayer.Receive("end\tspotify:track:t2");
+Equal("helper: and plays", "load\tspotify:track:t0\t1\t0", RepSent());
+repPlayer.Receive("playing\tspotify:track:t0\t0");
+repPlayer.Order.Repeat = Order.Repeats.One;
+repPlayer.Receive("near-end\tspotify:track:t0");
+Equal("helper: repeating one, nothing to preload (it's loaded)", "", RepSent());
+repPlayer.Receive("end\tspotify:track:t0");
+Equal("helper: and it's loaded again at its end", "load\tspotify:track:t0\t1\t0", RepSent());
+Check("helper: playing on", repPlayer.Playing);
+repPlayer.Order.Repeat = Order.Repeats.Off;
+repPlayer.SetVolume(0.343);
+Equal("helper: the volume is a command", "volume\t0.343", RepSent());
+repPlayer.SetVolume(0);
+Equal("helper: silent is 0", "volume\t0", RepSent());
+
+Equal("mpris: loop status none", "None", Mpris.LoopStatus(Order.Repeats.Off));
+Equal("mpris: loop status playlist", "Playlist", Mpris.LoopStatus(Order.Repeats.List));
+Equal("mpris: loop status track", "Track", Mpris.LoopStatus(Order.Repeats.One));
+Equal("mpris: none back", Order.Repeats.Off, Mpris.RepeatOf("None"));
+Equal("mpris: playlist back", Order.Repeats.List, Mpris.RepeatOf("Playlist"));
+Equal("mpris: track back", Order.Repeats.One, Mpris.RepeatOf("Track"));
+Equal("mpris: a status it doesn't have", null, Mpris.RepeatOf("track"));
+
+// ---- the volume -------------------------------------------------------------------------
+
+Equal("volume: full is a gain of 1", 1.0, Volume.GainOf(100));
+Equal("volume: none is silent", 0.0, Volume.GainOf(0));
+Check("volume: 50 % is about -18 dB", Math.Abs(20 * Math.Log10(Volume.GainOf(50)) + 18.06) < 0.01, Volume.GainOf(50).ToString());
+Check("volume: 10 % is -60 dB", Math.Abs(20 * Math.Log10(Volume.GainOf(10)) + 60) < 0.01);
+Check("volume: each step quieter than the last", Enumerable.Range(1, 100).All(p => Volume.GainOf(p) > Volume.GainOf(p - 1)));
+Equal("volume: out of range is brought in", 1.0, Volume.GainOf(150));
+Equal("volume: below is silent", 0.0, Volume.GainOf(-5));
+Equal("volume: gain as the helper takes it", "0.125", Volume.GainText(Volume.GainOf(50)));
+Equal("volume: a long fraction is cut to six places", "0.000125", Volume.GainText(Volume.GainOf(5)));
+var vol = new Volume(70);
+var volChanges = 0;
+vol.Changed += () => volChanges++;
+vol.Up();
+Equal("volume: + steps up 5", 75, vol.Percent);
+vol.Down(); vol.Down();
+Equal("volume: - steps down 5", 65, vol.Percent);
+vol.Set(98); vol.Up();
+Equal("volume: no further than 100", 100, vol.Percent);
+var volBefore = volChanges;
+vol.Up();
+Equal("volume: at 100, + changes nothing", volBefore, volChanges);
+vol.Set(3); vol.Down();
+Equal("volume: no lower than 0", 0, vol.Percent);
+Equal("volume: each change said", 7, volChanges);
+Equal("volume: a click at the bar's start", 0, Volume.AtX(0, 120));
+Equal("volume: a click in its middle", 50, Volume.AtX(60, 120));
+Equal("volume: a drag past its end", 100, Volume.AtX(400, 120));
+Equal("volume: a drag before its start", 0, Volume.AtX(-30, 120));
+Equal("volume: a bar not laid out yet", 0, Volume.AtX(10, 0));
+Equal("volume: MPRIS's 0.7", 70, Volume.FromMpris(0.7));
+Equal("volume: MPRIS's 1.5 is full", 100, Volume.FromMpris(1.5));
+Equal("volume: MPRIS's -1 is silent", 0, Volume.FromMpris(-1));
+Equal("volume: MPRIS's NaN is silent", 0, Volume.FromMpris(double.NaN));
+Equal("volume: as MPRIS has it", 0.7, new Volume(70).Mpris);
+Equal("volume: full to begin with", 100, new Volume().Percent);
+
+// ---- what's remembered between launches ------------------------------------------------
+
+var rem = Remembered.Parse("volume 35\nplaylist-width 300\n");
+Equal("remembered: the volume", 35, rem.Volume);
+Equal("remembered: the playlist width", 300, rem.PlaylistWidth);
+Equal("remembered: written as read", "volume 35\nplaylist-width 300\n", rem.Format());
+Equal("remembered: and read back", 35, Remembered.Parse(rem.Format()).Volume);
+var odd = Remembered.Parse("  volume   80  \r\nwhat 3\nplaylist-width wide\nvolume\n\n");
+Equal("remembered: spaces and CRLF are fine", 80, odd.Volume);
+Equal("remembered: a value that isn't a number is left at its default", PlaylistColumn.Default, odd.PlaylistWidth);
+Equal("remembered: out of range is brought in (volume)", 100, Remembered.Parse("volume 400").Volume);
+Equal("remembered: out of range is brought in (narrow)", PlaylistColumn.Min, Remembered.Parse("playlist-width 20").PlaylistWidth);
+Equal("remembered: out of range is brought in (wide)", PlaylistColumn.Max, Remembered.Parse("playlist-width 9000").PlaylistWidth);
+Equal("remembered: negative volume is silent", 0, Remembered.Parse("volume -3").Volume);
+Equal("remembered: nothing, the defaults", "volume 100\nplaylist-width 270\n", Remembered.Parse("").Format());
+var remDir = Path.Combine(Path.GetTempPath(), "nattsang-tests-" + Environment.ProcessId);
+var remPath = Path.Combine(remDir, "nattsang", "state");
+Equal("remembered: no file, the defaults", 100, Remembered.Load(remPath).Volume);
+new Remembered { Volume = 45, PlaylistWidth = 410 }.Save(remPath);
+var back = Remembered.Load(remPath);
+Equal("remembered: saved and loaded (volume)", 45, back.Volume);
+Equal("remembered: saved and loaded (width)", 410, back.PlaylistWidth);
+Check("remembered: no part file left", !File.Exists(remPath + ".part"));
+new Remembered { Volume = 60 }.Save(remPath);
+Equal("remembered: saved over", 60, Remembered.Load(remPath).Volume);
+Remembered.Load(null);
+Directory.Delete(remDir, true);
+var stateWas = Environment.GetEnvironmentVariable("XDG_STATE_HOME");
+Environment.SetEnvironmentVariable("XDG_STATE_HOME", "/x/state");
+Equal("remembered: under XDG_STATE_HOME", "/x/state/nattsang/state", Remembered.FilePath());
+Environment.SetEnvironmentVariable("XDG_STATE_HOME", "");
+Check("remembered: else under ~/.local/state", Remembered.FilePath()?.EndsWith("/.local/state/nattsang/state") == true, Remembered.FilePath() ?? "");
+Environment.SetEnvironmentVariable("XDG_STATE_HOME", stateWas);
+
+// The playlist column beside an open playlist.
+Equal("column: as wanted, with room", 270, PlaylistColumn.Shown(270, 1000, 13));
+Equal("column: no wider than 520", 520, PlaylistColumn.Shown(900, 2000, 13));
+Equal("column: no narrower than 180", 180, PlaylistColumn.Shown(50, 1000, 13));
+Equal("column: narrower to leave the songs room", 600 - 13 - PlaylistColumn.SongsMin, PlaylistColumn.Shown(500, 600, 13));
+Equal("column: but never under 180", 180, PlaylistColumn.Shown(500, 300, 13));
+Equal("column: clamp", 520, PlaylistColumn.Clamp(521));
+
+// ---- playlist names -------------------------------------------------------------------------
+
+Equal("names: as it is", "Discover Weekly", Keys.Named("Discover Weekly"));
+Equal("names: without the spaces around it", "Nekochan", Keys.Named("Nekochan "));
+Equal("names: runs of spaces made one", "dúr glad o Fangorn", Keys.Named("  dúr  glad o Fangorn   "));
+Equal("names: a tab is a space", "a b", Keys.Named("a\tb"));
+Equal("names: the service's own name stays whole", "of 17615273. metal", Keys.Named("of 17615273. metal"));
+Equal("names: none", "untitled", Keys.Named("   "));
+Equal("names: emoji kept", "ts tuff 🥀", Keys.Named("ts tuff 🥀"));
+
+// ---- the colours file, read again ------------------------------------------------------------
+
+var matugenFile = """
+    /* written by matugen from the wallpaper */
+    @define-color background #030306;
+    @define-color text #988c9e;
+    @define-color bright #b8abbf;
+    @define-color accent #80d4d9;
+    @define-color playing #ffb1c4;
+    @define-color label #f8bb71;
+    @define-color border #3b353e;
+    @define-color raised #1d1a20;
+    @define-color hover #131116;
+    @define-color groove #29252b;
+    @define-color dim #7c7381;
+    @define-color handle #5e5762;
+    @define-color muted #4a434d;
+    """;
+var fromMatugen = Palette.Parse(matugenFile);
+Equal("colours: every name read (background)", "#030306", fromMatugen.Hex("background"));
+Equal("colours: every name read (muted)", "#4a434d", fromMatugen.Hex("muted"));
+Equal("colours: every name read (border)", 0x3b353eu, fromMatugen.Border);
+Check("colours: not the same as the built-in", !fromMatugen.Same(Palette.Default));
+Check("colours: the same file again is the same", fromMatugen.Same(Palette.Parse(matugenFile)));
+Check("colours: one colour changed is a change", !fromMatugen.Same(Palette.Parse(matugenFile.Replace("#80d4d9", "#80d4da"))));
+Check("colours: a comment changed is not", fromMatugen.Same(Palette.Parse(matugenFile.Replace("from the wallpaper", "again"))));
+var halfWritten = Palette.Parse(matugenFile[..(matugenFile.IndexOf("@define-color label", StringComparison.Ordinal) + 22)]);
+Equal("colours: a file cut short keeps what came", "#ffb1c4", halfWritten.Hex("playing"));
+Equal("colours: and the built-in for the rest", Palette.Default.Hex("muted"), halfWritten.Hex("muted"));
+Check("colours: an empty file is the built-in", Palette.Parse("").Same(Palette.Default));
+var templateDir = Path.Combine(Path.GetTempPath(), "nattsang-colors-" + Environment.ProcessId);
+var configWas = Environment.GetEnvironmentVariable("XDG_CONFIG_HOME");
+Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", templateDir);
+Directory.CreateDirectory(Path.Combine(templateDir, "nattsang"));
+File.WriteAllText(Palette.FilePath(), matugenFile);
+Check("colours: loaded from the file", Palette.Load().Same(fromMatugen));
+File.WriteAllText(Palette.FilePath(), matugenFile.Replace("#ffb1c4", "#ff0000"));
+Equal("colours: loaded again after it changed", "#ff0000", Palette.Load().Hex("playing"));
+File.Delete(Palette.FilePath());
+Check("colours: gone, the built-in", Palette.Load().Same(Palette.Default));
+Directory.Delete(templateDir, true);
+Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", configWas);
+
+// ---- covers ---------------------------------------------------------------------------------
+
+Equal("covers: the service's are named by their id", "ab67616d0000b2735c0d2a8b6e2bc8f9e0f8f8f8", Covers.Key("https://i.scdn.co/image/ab67616d0000b2735c0d2a8b6e2bc8f9e0f8f8f8"));
+Check("covers: any other is a hash", Covers.Key("https://example.com/a/cover.jpg").StartsWith("url-"));
+Check("covers: never a path", !Covers.Key("https://i.scdn.co/image/../../etc").Contains('/'));
+Equal("covers: no URL, no name", "", Covers.Key(""));
+Check("covers: two URLs, two names", Covers.Key("https://e.com/1.jpg") != Covers.Key("https://e.com/2.jpg"));
+var coverDir = Path.Combine(Path.GetTempPath(), "nattsang-covers-" + Environment.ProcessId);
+Equal("covers: none kept", null, Covers.Load(coverDir, "https://e.com/1.jpg"));
+Covers.Save(coverDir, "https://e.com/1.jpg", [1, 2, 3]);
+Equal("covers: kept", "1,2,3", string.Join(",", Covers.Load(coverDir, "https://e.com/1.jpg") ?? []));
+Directory.Delete(coverDir, true);
 
 // ---- where the library panel is ----------------------------------------------------------
 

@@ -30,6 +30,22 @@ public static class Mpris
         return TrackPath + new string([.. id.Select(c => char.IsAsciiLetterOrDigit(c) ? c : '_')]);
     }
 
+    // Repeat as MPRIS's LoopStatus, and back; null for a status it doesn't know.
+    public static string LoopStatus(Order.Repeats r) => r switch
+    {
+        Order.Repeats.List => "Playlist",
+        Order.Repeats.One => "Track",
+        _ => "None",
+    };
+
+    public static Order.Repeats? RepeatOf(string loopStatus) => loopStatus switch
+    {
+        "None" => Order.Repeats.Off,
+        "Playlist" => Order.Repeats.List,
+        "Track" => Order.Repeats.One,
+        _ => null,
+    };
+
     public static long Microseconds(double seconds) => (long)Math.Round(Math.Max(0, seconds) * 1e6);
 
     // The track's page on the web, for a track of the service's; null for the sample.

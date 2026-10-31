@@ -63,6 +63,14 @@ public static class Keys
         _ => Rows.Tracks, // liked, a playlist, an album, a search
     };
 
+    // A playlist's name as its row shows it: without the spaces around it
+    // and with runs of spaces inside made one; "untitled" when it has none.
+    public static string Named(string name)
+    {
+        var words = name.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+        return words.Length == 0 ? "untitled" : string.Join(' ', words);
+    }
+
     // What a list says when there's nothing in it.
     public static string Empty(string key) => key switch
     {

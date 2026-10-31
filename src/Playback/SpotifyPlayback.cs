@@ -9,9 +9,10 @@ namespace Nattsang.Playback;
 // sees another thread.
 //
 // It plays what Order says: a row of a list, then the queue, then the rest
-// of the list. Near the end of a track it has the helper preload what comes
-// next, which starts when the track ends, without a gap; after the list's
-// last track it stops.
+// of the list, shuffled or not. Near the end of a track it has the helper
+// preload what comes next, which starts when the track ends, without a gap;
+// after the list's last track it stops, unless it repeats. Its volume is
+// the helper's own, set on the samples it plays (SetVolume).
 public sealed class SpotifyPlayback : IPlayback
 {
     public static readonly Status Starting = new("Starting the player", "");
@@ -90,6 +91,9 @@ public sealed class SpotifyPlayback : IPlayback
         var t = Order.Play(list, index);
         if (t.Uri.Length > 0) Load(t, true);
     }
+
+    // The helper's own volume: what its samples are multiplied by (Volume.Gain).
+    public void SetVolume(double gain) => send(Protocol.Line("volume", Volume.GainText(gain)));
 
     public void Seek(double seconds)
     {
@@ -183,11 +187,12 @@ public sealed class SpotifyPlayback : IPlayback
                 Changed?.Invoke();
                 break;
             case "near-end":
-                if (Ours() && Order.Upcoming(false) is { } upcoming) send(Protocol.Line("preload", upcoming.Uri));
+                // Repeating this one, it's loaded already: nothing to preload.
+                if (Ours() && Order.Following() is { } upcoming && upcoming.Uri != Track.Uri) send(Protocol.Line("preload", upcoming.Uri));
                 break;
             case "end":
                 if (!Ours()) break;
-                if (Order.Advance(false) is { } following) Load(following, true);
+                if (Order.Finish() is { } following) Load(following, true);
                 else StoppedAt(Track.Seconds);
                 break;
             case "stopped":
