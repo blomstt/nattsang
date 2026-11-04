@@ -222,8 +222,11 @@ add a template that writes that file, for example:
     input_path = '~/.config/matugen/templates/nattsang-colors.css'
     output_path = '~/.config/nattsang/colors.css'
 
-with lines like `@define-color accent {{colors.blue.default.hex}};` for
-each name above.
+with a line like `@define-color accent {{colors.primary.default.hex}};` for
+each name above. Take `accent`, `playing` and `label` from the wallpaper's
+Material colours (`primary`, `tertiary`, `secondary`): matugen's terminal
+colours (`colors.blue` and so on) are fixed hues only tinted by the
+wallpaper, so they look nearly the same on every wallpaper.
 
 ## The cover
 
